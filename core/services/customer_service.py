@@ -34,11 +34,9 @@ from tools.complaint_tools import get_recent_complaints, get_complaint_count
 
 logger = logging.getLogger(__name__)
 
-PROVIDER = "openai:gpt-4o-mini"
-
-
 class CustomerServiceHandler:
-    """Resolves a customer message end-to-end using the Observer fan-out pattern.
+    """
+    Resolves a customer message end-to-end using the Observer fan-out pattern.
 
     Built once at startup. Agents and their underlying LLM wrappers are
     constructed once and reused across all calls.
@@ -59,7 +57,8 @@ class CustomerServiceHandler:
             PurchaseVerificationAgent(
                 name="purchase_verification",
                 agent=Agent(
-                    model=make_model(PROVIDER), deps_type=Deps,
+                    model=model, 
+                    deps_type=Deps,
                     output_type=PurchaseResult,
                     tools=[log_decision, 
                            get_order_summary,
@@ -70,7 +69,8 @@ class CustomerServiceHandler:
             CustomerHistoryAgent(
                 name="customer_history",
                 agent=Agent(
-                    model=make_model(PROVIDER), deps_type=Deps,
+                    model=model, 
+                    deps_type=Deps,
                     output_type=ProfileResult,
                     tools=[log_decision, 
                            get_customer_profile,
@@ -82,7 +82,8 @@ class CustomerServiceHandler:
             ComplaintClassificationAgent(
                 name="complaint_classification",
                 agent=Agent(
-                    model=make_model(PROVIDER), deps_type=Deps,
+                    model=model, 
+                    deps_type=Deps,
                     output_type=ComplaintResult,
                     tools=[log_decision],
                 ),
@@ -90,7 +91,8 @@ class CustomerServiceHandler:
             SentimentAgent(
                 name="sentiment",
                 agent=Agent(
-                    model=make_model(PROVIDER), deps_type=Deps,
+                    model=model, 
+                    deps_type=Deps,
                     output_type=dict,
                     tools=[log_decision],
                 ),
@@ -123,11 +125,11 @@ class CustomerServiceHandler:
         Resets stateful agents, subscribes all agents to the hub, then fires
         the single publish() call that triggers the entire agent cascade.
         """
-        bus   = MessageHub()
+        hub   = MessageHub()
         board = Blackboard()
         deps  = Deps(
             repo=self._repo,
-            bus=bus,
+            hub=hub,
             board=board,
             policy=self._policy,
             message_id=message.message_id,
@@ -141,12 +143,12 @@ class CustomerServiceHandler:
         # Nothing runs here — the hub is just wired up.
         for agent in self._agents:
             agent.reset()
-            agent.subscribe(bus, deps)
+            agent.subscribe(hub, deps)
 
         # Single publish call triggers the entire cascade.
         # Does not return until deps.board.response is set.
         logger.info(f"[{message.message_id}] cascade start")
-        await bus.publish(message)
+        await hub.publish(message)
         logger.info(f"[{message.message_id}] cascade complete")
 
         response = deps.board.response

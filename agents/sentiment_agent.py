@@ -8,7 +8,7 @@ from schemas.contracts.profile_result import CustomerProfileContract
 
 class SentimentAgent(BaseAgent):
 
-    def subscribe(self, bus: MessageHub, deps: Deps) -> None:
+    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         self._pending_score = None
         self._pending_label = None
 
@@ -22,8 +22,8 @@ class SentimentAgent(BaseAgent):
                 event.sentiment_label = self._pending_label
                 deps.board.profile = event
 
-        bus.subscribe(CustomerMessageContract, on_message)
-        bus.subscribe(CustomerProfileContract, on_profile)
+        hub.subscribe(CustomerMessageContract, on_message)
+        hub.subscribe(CustomerProfileContract, on_profile)
 
     def get_instruction(self) -> str:
         return """

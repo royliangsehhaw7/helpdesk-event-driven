@@ -615,7 +615,7 @@ class Blackboard:
 
 ```python
 from dataclasses import dataclass
-from bus.event_bus import EventBus
+from coreus.message_hub import MessageHub
 from core.blackboard import Blackboard
 from db.repositories.facade import RepoFacade
 from schemas.data.policy import Policy
@@ -625,7 +625,7 @@ class Deps:
     """Injected into every agent run via RunContext.
 
     repo         — facade grouping all repositories. Tools call ctx.deps.repo.<repo>.<method>().
-    bus          — event bus. Agents publish findings through it.
+    hub          — message hub. Agents publish findings through it.
     board        — accumulates agent output events for this request.
     policy       — single policy config, loaded once at startup.
     message_id,
@@ -634,7 +634,7 @@ class Deps:
     total_tokens — accumulated LLM token usage across all agents for this request.
     """
     repo:         RepoFacade
-    bus:          EventBus
+    hub:          MessageHub
     board:        Blackboard
     policy:       Policy
     message_id:   str
@@ -776,7 +776,7 @@ async def get_complaint_count(ctx: RunContext[Deps]) -> str:
 
 Each agent has one domain responsibility, one subscription set, and one tool set. The LLM calls
 tools mid-reasoning to pull exactly the data it needs — never pre-loaded. Each agent posts its
-finding to `deps.board` and publishes it to the bus. No agent knows or cares what other
+finding to `deps.board` and publishes it to the hub. No agent knows or cares what other
 agents exist.
 
 All Phase 2 agents carry an `asyncio.Lock` and a `_fired` flag. See Section 3.4 for the full

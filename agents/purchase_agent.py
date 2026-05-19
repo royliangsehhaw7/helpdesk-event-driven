@@ -7,11 +7,11 @@ from schemas.contracts.purchase_result import PurchaseVerifiedContract
 
 class PurchaseVerificationAgent(BaseAgent):
 
-    def subscribe(self, bus: MessageHub, deps: Deps) -> None:
+    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(event):
             await self.handle(event, deps)
 
-        bus.subscribe(CustomerMessageContract, handler)
+        hub.subscribe(CustomerMessageContract, handler)
 
 
     def get_instruction(self) -> str:
@@ -39,14 +39,15 @@ class PurchaseVerificationAgent(BaseAgent):
 
 
     async def handle(self, event: CustomerMessageContract, deps: Deps) -> None:
-        result = await self._agent.run(
-            f"Verify purchase for order {deps.order_id} "
-            f"by customer {deps.customer_id}. "
-            f"Customer message: {event.message}",
+        result = await self._agent.run(f"""
+            Verify purchase for order {deps.order_id}
+            by customer {deps.customer_id}
+            Customer message: {event.message}
+            """,
             deps=deps,
             instructions=self.get_instruction(),
         )
         finding: PurchaseVerifiedContract = result.output
         deps.board.purchase = finding
         
-        await deps.bus.publish(finding)
+        await deps.hub.publish(finding)

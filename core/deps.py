@@ -10,7 +10,7 @@ class Deps:
     """Shared dependencies injected into every agent run via RunContext.
 
     db           — async MySQL wrapper. Agents query through tools only.
-    bus          — event bus. Agents publish findings through it.
+    hub          — event (message) hub. Agents publish findings through it.
     board        — accumulates agent outputs for this request.
     policy       — single policy config object, loaded once at startup.
     message_id,

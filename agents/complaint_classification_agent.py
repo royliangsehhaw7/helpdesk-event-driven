@@ -7,10 +7,10 @@ from schemas.contracts.complaint_result import ComplaintTypeContract
 
 class ComplaintClassificationAgent(BaseAgent):
 
-    def subscribe(self, bus: MessageHub, deps: Deps) -> None:
+    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(event):
             await self.handle(event, deps)
-        bus.subscribe(CustomerMessageContract, handler)
+        hub.subscribe(CustomerMessageContract, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -43,4 +43,4 @@ class ComplaintClassificationAgent(BaseAgent):
         )
         finding: ComplaintTypeContract = result.output
         deps.board.complaint_type = finding
-        await deps.bus.publish(finding)
+        await deps.hub.publish(finding)
