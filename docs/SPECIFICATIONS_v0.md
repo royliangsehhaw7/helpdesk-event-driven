@@ -63,8 +63,8 @@ There are seven agents. There is no orchestrator. There is no scheduler loop.
 | Agent | Phase | Subscribes to | Posts |
 |---|---|---|---|
 | `PurchaseVerificationAgent` | 1 | `CustomerMessageEvent` | `PurchaseVerifiedEvent` |
-| `CustomerHistoryAgent` | 1 | `CustomerMessageEvent` | `CustomerProfileEvent` |
-| `ComplaintClassificationAgent` | 1 | `CustomerMessageEvent` | `ComplaintTypeEvent` |
+| `CustomerAgent` | 1 | `CustomerMessageEvent` | `CustomerProfileEvent` |
+| `ComplaintAgent` | 1 | `CustomerMessageEvent` | `ComplaintTypeEvent` |
 | `SentimentAgent` | 1 | `CustomerMessageEvent` | updates `board.profile.sentiment_*` |
 | `RefundEligibilityAgent` | 2 | `PurchaseVerifiedEvent` + `ComplaintTypeEvent` | `RefundEligibilityEvent` |
 | `ResolutionAgent` | 2 | `RefundEligibilityEvent` + `CustomerProfileEvent` | `ResolutionOptionsEvent` |
@@ -105,7 +105,7 @@ When `hub.publish(CustomerMessageEvent)` is called, the `MessageHub` does this:
 await asyncio.gather(
     purchase_agent_handler(event),       # wraps purchase_agent.handle(event, deps)
     history_agent_handler(event),        # wraps history_agent.handle(event, deps)
-    classification_agent_handler(event), # wraps classification_agent.handle(event, deps)
+    complaint_agent_handler(event),      # wraps complaint_agent.handle(event, deps)
     sentiment_agent_handler(event),      # wraps sentiment_agent.handle(event, deps)
 )
 ```
@@ -122,7 +122,7 @@ time →
 
 purchase_agent:       [──────── LLM call ──────────────]→ post finding → publish
 history_agent:        [──────── LLM call ────────]→ post finding → publish
-classification_agent: [──── LLM call ──]→ post finding → publish
+complaint_agent:      [──── LLM call ──]→ post finding → publish
 sentiment_agent:      [──────── LLM call ──────]→ post finding → publish
 
                       ^ all start here (asyncio.gather)
@@ -144,16 +144,16 @@ and calls `await hub.publish(finding_event)`, that publish call is **nested insi
 `asyncio.gather()`. The Phase 2 handler runs synchronously from the Phase 1 agent's perspective
 before the Phase 1 agent's `handle()` returns.
 
-Concretely, when `classification_agent` finishes and calls
+Concretely, when `complaint_agent` finishes and calls
 `await hub.publish(ComplaintTypeEvent)`, the event loop runs
 `refund_agent.handle(ComplaintTypeEvent, deps)` immediately, inside the gather. If
 `deps.board.purchase` is already set (because `purchase_agent` finished first), the gate
 passes and `refund_agent` runs its check, posts `RefundEligibilityEvent`, and calls
 `await hub.publish(RefundEligibilityEvent)` — which in turn runs `resolution_agent.handle()` —
-which may or may not pass its gate — all before `classification_agent.handle()` returns to the
+which may or may not pass its gate — all before `complaint_agent.handle()` returns to the
 outer gather.
 
-The full nested execution tree when `classification_agent` is the last Phase 1 agent to finish:
+The full nested execution tree when `complaint_agent` is the last Phase 1 agent to finish:
 
 ```
 asyncio.gather() — Phase 1
@@ -179,7 +179,7 @@ asyncio.gather() — Phase 1
   │     deps.board.profile.sentiment_score = score   (in-place update)
   │     ← returns to gather (no publish needed)
   │
-  └── classification_agent.handle()   ← finishes last in this scenario
+  └── complaint_agent.handle()   ← finishes last in this scenario
         await agent.run() ...
         deps.board.complaint_type = ComplaintTypeEvent
         await hub.publish(ComplaintTypeEvent)
@@ -214,12 +214,12 @@ driven by whichever Phase 1 agent finishes last.
 
 ### 3.4 The race condition — and why locks are mandatory
 
-Consider this scenario: `purchase_agent` and `classification_agent` finish at almost the same
+Consider this scenario: `purchase_agent` and `complaint_agent` finish at almost the same
 time. Both call `await hub.publish(their_finding_event)` in rapid succession. Because these
 `await` calls are inside the outer `asyncio.gather()`, the event loop can interleave them:
 
 ```
-classification_agent:  deps.board.complaint_type = ComplaintTypeEvent
+complaint_agent:  deps.board.complaint_type = ComplaintTypeEvent
                        await hub.publish(ComplaintTypeEvent)
                              └── refund_agent.handle()
                                    gate check: purchase ✓  complaint ✓  → PASSES
@@ -323,7 +323,7 @@ customer_service/
 │   ├── base_agent.py
 │   ├── purchase_verification_agent.py
 │   ├── customer_history_agent.py
-│   ├── complaint_classification_agent.py
+│   ├── complaint_agent.py
 │   ├── sentiment_agent.py
 │   ├── refund_eligibility_agent.py
 │   ├── resolution_agent.py
@@ -1012,7 +1012,7 @@ async def get_complaint_count(ctx: RunContext[Deps]) -> str:
 
 ### 8.6 Tool registration per agent
 
-| Tool | PurchaseVerification | CustomerHistory | ComplaintClassification | Sentiment | RefundEligibility | Resolution | ResponseComposer |
+| Tool | PurchaseVerification | CustomerAgent | ComplaintAgent | Sentiment | RefundEligibility | Resolution | ResponseComposer |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | `log_decision` | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ |
 | `get_customer_profile` | — | ✓ | — | — | — | — | ✓ |
@@ -1122,7 +1122,7 @@ class PurchaseVerificationAgent(BaseAgent):
 
 ---
 
-### 9.4 CustomerHistoryAgent
+### 9.4 CustomerAgent
 
 - **Subscribes to**: `CustomerMessageEvent`
 - **Responsibility**: Build customer profile — tier, order count, complaint count, repeat issue
@@ -1133,7 +1133,7 @@ class PurchaseVerificationAgent(BaseAgent):
 - **Lock**: Not needed — Phase 1, unique findings field.
 
 ```python
-class CustomerHistoryAgent(BaseAgent):
+class CustomerAgent(BaseAgent):
 
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(event):
@@ -1142,7 +1142,7 @@ class CustomerHistoryAgent(BaseAgent):
 
     def get_instruction(self) -> str:
         return """
-            You are the CustomerHistoryAgent in a customer service system.
+            You are the CustomerAgent in a customer service system.
             Build a profile of this customer from their history.
 
             Use your tools to:
@@ -1178,7 +1178,7 @@ class CustomerHistoryAgent(BaseAgent):
 
 ---
 
-### 9.5 ComplaintClassificationAgent
+### 9.5 ComplaintAgent
 
 - **Subscribes to**: `CustomerMessageEvent`
 - **Responsibility**: Classify complaint type, severity, keywords, and explicit intent flags
@@ -1188,7 +1188,7 @@ class CustomerHistoryAgent(BaseAgent):
 - **Lock**: Not needed — Phase 1, unique findings field.
 
 ```python
-class ComplaintClassificationAgent(BaseAgent):
+class ComplaintAgent(BaseAgent):
 
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(event):
@@ -1197,7 +1197,7 @@ class ComplaintClassificationAgent(BaseAgent):
 
     def get_instruction(self) -> str:
         return """
-            You are the ComplaintClassificationAgent.
+            You are the ComplaintAgent.
             Classify the customer complaint from the message text only.
 
             complaint_type — exactly one of:
@@ -1548,8 +1548,8 @@ from datetime import datetime
 from pydantic_ai import Agent
 
 from agents.purchase_verification_agent import PurchaseVerificationAgent
-from agents.customer_history_agent import CustomerHistoryAgent
-from agents.complaint_classification_agent import ComplaintClassificationAgent
+from agents.customer_agent import CustomerAgent
+from agents.complaint__agent import ComplaintAgent
 from agents.sentiment_agent import SentimentAgent
 from agents.refund_eligibility_agent import RefundEligibilityAgent
 from agents.resolution_agent import ResolutionAgent
@@ -1618,7 +1618,7 @@ async def handle_customer_message(
                    get_order_line_items, get_order_total],
         ),
     )
-    history_agent = CustomerHistoryAgent(
+    customer_agent = CustomerAgent(
         name="customer_history",
         agent=Agent(
             model=make_model(PROVIDER), deps_type=Deps,
@@ -1628,8 +1628,8 @@ async def handle_customer_message(
                    get_recent_complaints, get_complaint_count],
         ),
     )
-    classification_agent = ComplaintClassificationAgent(
-        name="complaint_classification",
+    complaint_agent = ComplaintAgent(
+        name="complaint_agent",
         agent=Agent(
             model=make_model(PROVIDER), deps_type=Deps,
             output_type=ComplaintTypeEvent,
@@ -1671,8 +1671,8 @@ async def handle_customer_message(
     #
     for agent in [
         purchase_agent,
-        history_agent,
-        classification_agent,
+        customer_agent,
+        complaint_agent,
         sentiment_agent,
         refund_agent,
         resolution_agent,
@@ -1773,8 +1773,8 @@ simultaneously and confirm `_fired` prevents double-posting.
 
 **Phase 7 — Phase 1 agents** (`agents/`)
 
-Build in order: `ComplaintClassificationAgent` → `PurchaseVerificationAgent` →
-`CustomerHistoryAgent` → `SentimentAgent`. For each: subscribe to a live hub with deps,
+Build in order: `ComplaintAgent` → `PurchaseVerificationAgent` →
+`CustomerAgent` → `SentimentAgent`. For each: subscribe to a live hub with deps,
 call `hub.publish(CustomerMessageEvent)`, confirm finding posted to `deps.board` and
 published to hub.
 

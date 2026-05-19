@@ -1,36 +1,146 @@
 # Multi-Agent Customer Service System
-## Specification v4.0 — Observer / Event-Driven Pattern with Tool-Based Data Access
+## Specification v6.0 — Observer / Pub-Sub Pattern with Conversational Intake, Tool-Based Data Access, and Blackboard-Driven Agent Communication
 
 ---
 
 ## 1. Purpose
 
-A learning-oriented multi-agent system that handles customer service requests end-to-end. The
-primary goal is to understand and implement the **Observer Pattern with concurrent agent fan-out**
-in a grounded, production-mimicking context using pydantic-ai's deps, agents, and tools features
-properly.
+A learning-oriented multi-agent system that handles customer service requests end-to-end,
+including a conversational intake phase that collects context before resolution begins.
+
+The primary goal is to understand and implement two complementary patterns in one system:
+
+- **Sequential conversational intake** — a single LLM agent holds a multi-turn chat with
+  the customer, accumulates context across turns, and signals when it has enough to proceed.
+- **Observer pattern with concurrent agent fan-out** — once intake is complete, a single
+  publish call triggers a cascade of specialised agents that work concurrently, each
+  reacting to typed messages rather than being told what to do.
+
+The system is built on pydantic-ai's `Agent`, `deps`, and `tools` features and uses
+`asyncio.gather()` for concurrent execution within the resolution cascade.
 
 ---
 
 ## 2. Architecture
 
-### 2.1 Pattern
+### 2.1 Two-phase design
 
-This system implements the **Observer Pattern with Event-Driven Agent Fan-out**.
+The system is split into two distinct phases with a hard boundary between them.
 
-An `MessageHub` is a dictionary that maps contract types to lists of handler functions. When
-`hub.publish(contract)` is called, the hub looks up the contract type in its dictionary, finds all
-registered handlers, and calls them all via `asyncio.gather()`.
+```
+Customer
+   │
+   │  turn 1: "hi, I have a problem with an order"
+   │  turn 2: "it's ORD-1001"
+   │  turn 3: "the keyboard arrived crushed and a key doesn't work, I want a refund"
+   ▼
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│  Phase 1 — Conversational Intake                                                  │
+│                                                                                   │
+│  IntakeAgent holds a multi-turn chat with the customer.                           │
+│  Asks for order_id and a full complaint description. One question at a time.      │
+│  Grows its own _history across turns via pydantic-ai's message_history parameter. │
+│  Returns IntakeResult on every turn. When ready=True, hands off.                  │
+└──────────────────────────┬────────────────────────────────────────────────────────┘
+                           │  ready=True
+                           │  order_id="ORD-1001"
+                           │  message="Customer received a keyboard with
+                           │           crushed packaging and a faulty key.
+                           │           Wants a refund or complaint filed."
+                           ▼
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│  Phase 2 — Resolution Cascade                                                     │
+│                                                                                   │
+│  CustomerServiceHandler builds a CustomerMessage and fires one publish() call.    │
+│  Seven agents fan out concurrently via the MessageHub.                            │ 
+│  Each reacts to typed contracts. No orchestrator. No scheduler.                   │
+└───────────────────────────────────────────────────────────────────────────────────┘
+```
 
-Agents register themselves into that dictionary at startup by calling `subscribe()`. Each agent
-tells the message hub which contract type it wants to listen to. From that point on, whenever that contract 
-type is published, the hub calls that agent's handler.
+The two phases never overlap. Phase 2 does not start until `IntakeAgent` signals
+`ready=True`. `IntakeAgent` has no knowledge of `MessageHub`, `Deps`, `Blackboard`, or
+any resolution agent.
 
-No agent is told to go by an orchestrator. No scheduler sequences the work. Each agent fires
-the moment the message hub calls its handler — and whether it does real work or exits silently depends
-entirely on its own internal gate condition.
+---
 
-### 2.2 Why no Blackboard
+### 2.2 Pattern — Observer with typed messages and Blackboard data sharing
+
+The resolution cascade implements the **Observer pattern**. Its mechanism in this system
+is a `MessageHub` — a dictionary that maps message types to lists of async handler
+functions.
+
+In the classical Observer pattern, subjects maintain a registry of observers and notify
+them when something changes. Here:
+
+- **The subject** is `MessageHub`. It maintains the registry and notifies observers.
+- **The observers** are the resolution agents. Each registers a handler for one or more
+  message types via `subscribe()`.
+- **The notification** is `hub.publish(message)` — the hub calls all handlers registered
+  for that message type, concurrently, via `asyncio.gather()`.
+
+#### Two distinct concerns: outputs and messages
+
+This system maintains a clean separation between what an LLM produces and what the hub routes.
+
+**Output schemas** (`schemas/outputs/`) — what the LLM must produce. Shaped for the model's
+reasoning. Rich, with all fields the agent needs to make its decision. Stored on
+`deps.board` for any downstream agent to read directly.
+
+**Messages** (`schemas/messages/`) — what gets published to the hub. Lean, typed notification
+that something has been determined. Carries only what is needed for routing and gate
+conditions. Downstream agents do not read data off the message — they read `deps.board`.
+
+One agent, two distinct steps:
+
+```python
+output: PurchaseOutput = result.output   # rich — goes to board
+deps.board.purchase = output
+
+message = PurchaseMessage(               # lean — goes to hub
+    order_id=output.order_id,
+    verified=output.verified,
+)
+await deps.hub.publish(message)
+```
+
+This separation means:
+- The LLM output schema can evolve independently of what the hub routes.
+- Downstream agents always read full, rich data from `deps.board` — never reconstruct
+  it from a message payload.
+- The hub message is a pure notification: "this has been determined, read the board."
+
+#### What the MessageHub is
+
+The `MessageHub` is a dictionary and an `asyncio.gather()` call. Nothing more.
+
+```python
+# State of the hub after all subscribe() calls:
+{
+    ServiceRequest:   [purchase_handler, profile_handler,
+                       complaint_handler, sentiment_handler],
+    PurchaseMessage:  [refund_handler],
+    ComplaintMessage: [refund_handler],
+    ProfileMessage:   [resolution_handler],
+    RefundMessage:    [resolution_handler],
+    ResolutionMessage:[composer_handler],
+}
+
+# publish() does exactly this:
+async def publish(self, message: BaseModel) -> None:
+    handlers = self._subscribers.get(type(message), [])
+    if handlers:
+        await asyncio.gather(*[h(message) for h in handlers])
+```
+
+The hub has zero domain knowledge. It does not know what a customer is, what a refund
+is, or what any message contains. It only knows message types and handler lists.
+
+The term "event loop" is reserved exclusively for Python's `asyncio` event loop and is
+never used to describe the hub's dispatch mechanism.
+
+---
+
+### 2.3 Why no Blackboard
 
 The Blackboard pattern is appropriate when the solution is unknown upfront and emerges
 incrementally from agent contributions — medical diagnosis, speech recognition, document
@@ -39,57 +149,180 @@ structured, queryable facts in MySQL. Agents query them on demand through tools.
 `BlackBoard` class is removed entirely.
 
 The only accumulation need — storing agent findings so downstream agents can read them —
-is handled by `Blackboard`, a plain typed dataclass on `Deps`. It is a result accumulator, not
-a blackboard.
+is handled by `Blackboard`, a plain typed dataclass on `Deps`. It is a result accumulator,
+not a blackboard in the AI sense.
 
-### 2.3 Agents
+Agents write their full LLM output to `deps.board` immediately after the LLM call completes.
+Downstream agents read from `deps.board` directly — never from the hub message payload.
+The hub message is a lean notification only.
 
-There are seven agents. There is no orchestrator. There is no scheduler loop.
+---
 
-| Agent | Subscribes to | Posts |
+### 2.4 Responsibility boundaries
+
+Three classes own the system's top-level concerns. They do not overlap.
+
+| Class | Location | Responsibility |
 |---|---|---|
-| `PurchaseVerificationAgent` | `CustomerMessageContract` | `PurchaseVerifiedContract` |
-| `CustomerAgent` | `CustomerMessageContract` | `CustomerProfileContract` |
-| `ComplaintAgent` | `CustomerMessageContract` | `ComplaintTypeContract` |
-| `SentimentAgent` | `CustomerMessageContract` | updates `findings.profile.sentiment_*` |
-| `RefundEligibilityAgent` | `PurchaseVerifiedContract` + `ComplaintTypeContract` | `RefundEligibilityContract` |
-| `ResolutionAgent` | `RefundEligibilityContract` + `CustomerProfileContract` | `ResolutionOptionsContract` |
-| `ResponseComposerAgent` | `ResolutionOptionsContract` | `CustomerResponseContract` |
+| `IntakeAgent` | `agents/intake_agent.py` | Multi-turn chat with customer. Collects `order_id` and complete complaint description. Signals `ready=True` when done. No hub, no deps, no findings. |
+| `CustomerServiceHandler` | `service/handler.py` | Builds agents once at startup. Per request: creates `MessageHub`, `Blackboard`, `Deps`; resets stateful agents; subscribes all agents; fires the single `publish()` call; returns the result dict. |
+| `MessageHub` | `core/message_hub.py` | Pure fan-out. Maps contract types to handler lists. Calls `asyncio.gather()` on publish. Zero domain knowledge. |
+
+---
+
+### 2.5 Agents
+
+There are eight agents in total. One handles intake. Seven handle resolution.
+
+**Intake agent** — outside the hub, outside `Deps`.
+
+| Agent | Role |
+|---|---|
+| `IntakeAgent` | Conversational. Holds `_history` across turns. Returns `IntakeResult` each turn. No LLM `output_type` constraint beyond `IntakeResult`. Discarded at session end. |
+
+**Resolution agents** — subscribed to the hub, receive `Deps`.
+
+| Agent | Subscribes to | Writes to board | Publishes |
+|---|---|---|---|
+| PurchaseVerificationAgent | ServiceRequest | `board.purchase` (PurchaseOutput) | PurchaseMessage |
+| CustomerAgent | ServiceRequest | `board.profile` (ProfileOutput) | ProfileMessage |
+| ComplaintAgent | ServiceRequest | `board.complaint` (ComplaintOutput) | ComplaintMessage |
+| SentimentAgent | ServiceRequest | updates `board.profile.sentiment_*` in place | — |
+| RefundEligibilityAgent | PurchaseMessage + ComplaintMessage | `board.refund_eligibility` (RefundOutput) | RefundMessage |
+| ResolutionAgent | RefundMessage + ProfileMessage | `board.resolution` (ResolutionOutput) | ResolutionMessage |
+| ResponseComposerAgent | ResolutionMessage | `board.response` (ResponseOutput) | — |
+
+`RefundEligibilityAgent` is pure Python — no LLM, no tools. It applies policy rules
+directly against `deps.board`.
+
+---
+
+### 2.6 Naming convention
+
+**Output schemas** (`schemas/outputs/`) name what the LLM produced, using the `Output` suffix:
+
+| Class | Produced by |
+|---|---|
+| `PurchaseOutput` | `PurchaseVerificationAgent` LLM |
+| `ProfileOutput` | `CustomerAgent` LLM |
+| `ComplaintOutput` | `ComplaintAgent` LLM |
+| `RefundOutput` | `RefundEligibilityAgent` (pure Python) |
+| `ResolutionOutput` | `ResolutionAgent` LLM |
+| `ResponseOutput` | `ResponseComposerAgent` LLM |
+
+**Messages** (`schemas/messages/`) name what the hub routes. Inbound triggers use a descriptive
+noun. Agent notifications use the domain noun plus `Message`:
+
+| Class | Role |
+|---|---|
+| `ServiceRequest` | Inbound trigger. Enters the hub as the first publish call. |
+| `PurchaseMessage` | Published by `PurchaseVerificationAgent` after writing to board. |
+| `ProfileMessage` | Published by `CustomerAgent` after writing to board. |
+| `ComplaintMessage` | Published by `ComplaintAgent` after writing to board. |
+| `RefundMessage` | Published by `RefundEligibilityAgent` after writing to board. |
+| `ResolutionMessage` | Published by `ResolutionAgent` after writing to board. |
+| `ServiceResponse` | Terminal output. Nobody subscribes — it ends the cascade. |
+
+`IntakeResult` belongs to neither folder — it is the intake loop's turn-by-turn signal,
+never published to the hub.
+
+---
+
+### 2.7 Per-request vs shared state
+
+`CustomerServiceHandler` is built once and reused across all customer requests. Agents
+and their underlying pydantic-ai `Agent` instances are also built once in
+`_build_agents()` — they carry no per-request state themselves.
+
+Per-request state is isolated inside `handle()`:
+
+| Object | Scope | Why |
+|---|---|---|
+| `MessageHub` | Per request | Handler lists must be built fresh on every `subscribe()` call. |
+| `Blackboard` | Per request | Accumulates this request's agent outputs only. |
+| `Deps` | Per request | Carries `message_id`, `customer_id`, `order_id`, `total_tokens`, and references to the per-request hub and findings. |
+
+Agents that carry `_fired` (`RefundEligibilityAgent`, `ResolutionAgent`,
+`ResponseComposerAgent`) must be reset before each request's subscribe loop. See
+Section 3.5.
+
+`IntakeAgent` is per-session — it holds `_history` across turns for one customer
+conversation and is discarded when the session ends.
 
 ---
 
 ## 3. Execution Model
 
-### 3.1 What the MessageHub actually is
+### 3.1 Intake phase — sequential multi-turn
 
-The `MessageHub` is a dictionary and a `asyncio.gather()` call. Nothing more.
+`IntakeAgent` uses pydantic-ai's native `message_history` parameter to maintain
+conversation state across turns. On each call to `collect()`:
+
+```python
+result = await self._agent.run(
+    user_input,
+    message_history=self._history,
+    instructions=self._get_instruction(customer_id),
+)
+self._history = result.all_messages()
+return result.output   # IntakeResult
+```
+
+The LLM sees the full conversation thread on every turn. `IntakeResult.ready` is
+`False` until the agent has collected both `order_id` and a complete complaint
+description, at which point it sets `ready=True` and populates `message` with a clean
+2-4 sentence summary of the full conversation.
+
+`main.py` loops on `ready=False`, printing `intake_result.reply` to the customer each
+turn. When `ready=True`, it constructs a `CustomerMessage` and hands it to
+`CustomerServiceHandler.handle()`. The intake loop ends.
+
+```
+Customer: "hi, I have a problem with an order"
+Agent:    "I'm sorry to hear that. Could you share your order number?"   ← ready=False
+
+Customer: "ORD-1001"
+Agent:    "Thanks. Could you describe what happened with the order?"      ← ready=False
+
+Customer: "packaging was crushed and a key isn't working. I want a refund."
+Agent:    "Got it, I'm looking into that for you now."                    ← ready=True
+                                                                            → hand off
+```
+
+---
+
+### 3.2 What the MessageHub actually is
+
+The `MessageHub` is a dictionary and an `asyncio.gather()` call. Nothing more.
 
 ```python
 # The entire state of the hub after all subscribe() calls:
 {
-    CustomerMessageContract:   [purchase_handler, history_handler, complaint_handler, sentiment_handler],
-    PurchaseVerifiedContract:  [refund_handler],
-    ComplaintTypeContract:     [refund_handler],
-    CustomerProfileContract:   [resolution_handler],
-    RefundEligibilityContract: [resolution_handler],
-    ResolutionOptionContract:  [composer_handler],
+    ServiceRequest:    [purchase_handler, profile_handler, complaint_handler, sentiment_handler],
+    PurchaseMessage:   [refund_handler],
+    ComplaintMessage:  [refund_handler],
+    ProfileMessage:    [resolution_handler],
+    RefundMessage:     [resolution_handler],
+    ResolutionMessage: [composer_handler],
 }
 
 # publish() does exactly this:
-async def publish(self, contract: BaseModel) -> None:
-    handlers = self._subscribers.get(type(contract), [])
+async def publish(self, message: BaseModel) -> None:
+    handlers = self._subscribers.get(type(message), [])
     if handlers:
-        await asyncio.gather(*[h(contract) for h in handlers])
+        await asyncio.gather(*[h(message) for h in handlers])
 ```
 
-- When `publish(CustomerMessageContract)` is called 
-  - the hub looks up `CustomerMessageContract`        
-    - finds 4 handlers, and calls `asyncio.gather()` on all 4. 
-- When `publish(PurchaseVerifiedContract)` is called 
-  - the hub looks up `PurchaseVerifiedContract` 
+- When `publish(ServiceRequest)` is called
+  - the hub looks up `ServiceRequest`
+    - finds 4 handlers, and calls `asyncio.gather()` on all 4.
+- When `publish(PurchaseMessage)` is called
+  - the hub looks up `PurchaseMessage`
     - finds 1 handler, and calls it.
 
-### 3.2 What asyncio.gather() actually does
+---
+
+### 3.3 What asyncio.gather() actually does
 
 ```python
 await asyncio.gather(coro_a(), coro_b(), coro_c())
@@ -104,7 +337,9 @@ Python schedules all three coroutines on the event loop.
 The key implication: **coroutines interleave at `await` points, not at arbitrary lines**.
 Between two `await` statements, a coroutine runs uninterrupted.
 
-### 3.3 The correct execution order
+---
+
+### 3.4 The correct execution order
 
 There is no rule that says "all Phase 1 agents complete before any Phase 2 agent is called."
 **Phase 2 agents are called immediately as each Phase 1 agent finishes and publishes its result.**
@@ -122,30 +357,26 @@ So the correct statement is:
 - Phase 2 agents **do real work** only when all their required findings are present
 - The gate condition is the only thing enforcing this — not the hub, not asyncio
 
-### 3.4 Step by step execution
+---
+
+### 3.5 Step by step execution
 
 **Step 1 — the subscribe loop builds the dictionary**
 
 ```python
-for agent in [
-    purchase_agent,
-    history_agent,
-    complaint_agent,
-    sentiment_agent,
-    refund_agent,
-    resolution_agent,
-    composer_agent,
-]:
+for agent in self._agents:
+    agent.reset()           # clears _fired on stateful agents — no-op on others
     agent.subscribe(hub, deps)
 ```
 
-Each agent's `subscribe()` method calls `hub.subscribe(ContractType, handler)` which appends
-the handler to the dictionary list for that contract type. Nothing runs. The dictionary is just built.
+Each agent's `subscribe()` method calls `hub.subscribe(ContractType, handler)` which
+appends the handler to the dictionary list for that contract type. Nothing runs. The
+dictionary is just built.
 
-**Step 2 — the single trigger in main.py**
+**Step 2 — the single trigger**
 
 ```python
-await hub.publish(message)  # message is CustomerMessageContract
+await hub.publish(message)  # message is CustomerMessage
 ```
 
 Inside `hub.publish()`:
@@ -159,19 +390,19 @@ await asyncio.gather(*[h(contract) for h in handlers])
 All 4 handlers start. Each one immediately hits `await self._agent.run(...)` inside its
 `handle()` method and suspends. All 4 LLM calls are now in flight simultaneously.
 
-**Step 3 — say complaint_agent LLM responds first**
+**Step 3 — say ComplaintAgent LLM responds first**
 
 Its `handle()` resumes from `await self._agent.run(...)`:
 
 ```python
-async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
+async def handle(self, contract: CustomerMessage, deps: Deps) -> None:
     result = await self._agent.run(...)           # resumes here
-    finding: ComplaintTypeContract = result.output
+    finding: ComplaintResult = result.output
     deps.board.complaint_type = finding        # stores finding
-    await deps.hub.publish(finding)               # publishes ComplaintTypeContract
+    await deps.hub.publish(finding)               # publishes ComplaintResult
 ```
 
-`hub.publish(finding)` looks up `ComplaintTypeContract`. Finds `[refund_handler]`. Calls
+`hub.publish(finding)` looks up `ComplaintResult`. Finds `[refund_handler]`. Calls
 `refund_agent.handle()` immediately — right now, while the other 3 Phase 1 agents are
 still waiting for their LLM responses:
 
@@ -187,19 +418,19 @@ async def handle(self, contract, deps: Deps) -> None:
 `deps.board.purchase` is `None` because `purchase_agent` has not finished yet. Gate fails.
 `refund_agent` exits silently. Control returns to `complaint_agent.handle()` which is now done.
 
-**Step 4 — say purchase_agent LLM responds next**
+**Step 4 — say PurchaseVerificationAgent LLM responds next**
 
 Its `handle()` resumes:
 
 ```python
-async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
+async def handle(self, contract: CustomerMessage, deps: Deps) -> None:
     result = await self._agent.run(...)        # resumes here
-    finding: PurchaseVerifiedContract = result.output
+    finding: PurchaseResult = result.output
     deps.board.purchase = finding           # stores finding
-    await deps.hub.publish(finding)            # publishes PurchaseVerifiedContract
+    await deps.hub.publish(finding)            # publishes PurchaseResult
 ```
 
-`hub.publish(finding)` looks up `PurchaseVerifiedContract`. Finds `[refund_handler]`. Calls
+`hub.publish(finding)` looks up `PurchaseResult`. Finds `[refund_handler]`. Calls
 `refund_agent.handle()` again — immediately:
 
 ```python
@@ -223,10 +454,10 @@ Gate passes. Continues outside the lock:
         deps.policy,
     )
     deps.board.refund_eligibility = finding
-    await deps.hub.publish(finding)            # publishes RefundEligibilityContract
+    await deps.hub.publish(finding)            # publishes RefundResult
 ```
 
-`hub.publish(finding)` looks up `RefundEligibilityContract`. Finds `[resolution_handler]`. Calls
+`hub.publish(finding)` looks up `RefundResult`. Finds `[resolution_handler]`. Calls
 `resolution_agent.handle()` immediately — while `history_agent` and `sentiment_agent` are
 still waiting for their LLM responses:
 
@@ -245,19 +476,19 @@ Gate fails. `resolution_agent` exits silently. Control unwinds back through `ref
 back through `purchase_agent.handle()` which is now done. Back to the original `asyncio.gather()`.
 Still waiting for `history_agent` and `sentiment_agent`.
 
-**Step 5 — history_agent LLM responds**
+**Step 5 — CustomerAgent LLM responds**
 
 Its `handle()` resumes:
 
 ```python
-async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
+async def handle(self, contract: CustomerMessage, deps: Deps) -> None:
     result = await self._agent.run(...)        # resumes here
-    finding: CustomerProfileContract = result.output
+    finding: ProfileResult = result.output
     deps.board.profile = finding            # stores finding
-    await deps.hub.publish(finding)            # publishes CustomerProfileContract
+    await deps.hub.publish(finding)            # publishes ProfileResult
 ```
 
-`hub.publish(finding)` looks up `CustomerProfileContract`. Finds `[resolution_handler]`. Calls
+`hub.publish(finding)` looks up `ProfileResult`. Finds `[resolution_handler]`. Calls
 `resolution_agent.handle()`:
 
 ```python
@@ -277,36 +508,36 @@ Gate passes. Continues:
 
 ```python
     result = await self._agent.run(...)
-    finding: ResolutionOptionsContract = result.output
+    finding: ResolutionResult = result.output
     deps.board.resolution = finding
-    await deps.hub.publish(finding)            # publishes ResolutionOptionsContract
+    await deps.hub.publish(finding)            # publishes ResolutionResult
 ```
 
-`hub.publish(finding)` looks up `ResolutionOptionsContract`. Finds `[composer_handler]`. Calls
+`hub.publish(finding)` looks up `ResolutionResult`. Finds `[composer_handler]`. Calls
 `composer_agent.handle()`:
 
 ```python
-async def handle(self, contract: ResolutionOptionsContract, deps: Deps) -> None:
+async def handle(self, contract: ResolutionResult, deps: Deps) -> None:
     async with self._lock:
         if self._fired:
             return
         self._fired = True
 
     result = await self._agent.run(...)
-    finding: CustomerResponseContract = result.output
+    finding: CustomerResponse = result.output
     deps.board.response = finding
-    await deps.hub.publish(finding)            # publishes CustomerResponseContract
+    await deps.hub.publish(finding)            # publishes CustomerResponse
 ```
 
-`hub.publish(finding)` looks up `CustomerResponseContract`. Nobody subscribed. `handlers` is `[]`.
+`hub.publish(finding)` looks up `CustomerResponse`. Nobody subscribed. `handlers` is `[]`.
 Does nothing. `composer_agent.handle()` is done.
 
 Control unwinds: back through `resolution_agent.handle()`, back through `history_agent.handle()`
 which is now done. `sentiment_agent` finishes around this time too. The original `asyncio.gather()`
-has all 4 coroutines done. Returns. `await hub.publish(message)` in `main.py` returns.
-`deps.board.response` is set.
+has all 4 coroutines done. Returns. `await hub.publish(message)` in `CustomerServiceHandler.handle()`
+returns. `deps.board.response` is set.
 
-**Step 6 — main.py reads the result**
+**Step 6 — CustomerServiceHandler reads the result**
 
 ```python
 await hub.publish(message)
@@ -321,26 +552,28 @@ return {
 }
 ```
 
-### 3.5 The race condition — and why locks are mandatory
+---
+
+### 3.6 The race condition — and why locks are mandatory
 
 Consider this scenario: `purchase_agent` and `complaint_agent` finish at almost the same
 time. Both call `await deps.hub.publish(their_finding)` in rapid succession. The event loop
 can interleave them:
 
 ```
-complaint_agent:  deps.board.complaint_type = ComplaintTypeContract
-                       await hub.publish(ComplaintTypeContract)
+complaint_agent:  deps.board.complaint_type = ComplaintResult(...)
+                       await hub.publish(ComplaintResult)
                              └── refund_agent.handle()
                                    gate check: purchase ✓  complaint ✓  → PASSES
                                    ← still inside _check(), hasn't set _fired yet
 
-purchase_agent:        await hub.publish(PurchaseVerifiedContract)
+purchase_agent:        await hub.publish(PurchaseResult)
                              └── refund_agent.handle()
                                    gate check: purchase ✓  complaint ✓  → PASSES AGAIN
 ```
 
-Both invocations pass the gate. `_check()` runs twice. `RefundEligibilityContract` is published
-twice. `ResolutionContract` fires twice. `CustomerResponseContract` is written twice.
+Both invocations pass the gate. `_check()` runs twice. `RefundResult` is published
+twice. `ResolutionResult` fires twice. `CustomerResponse` is written twice.
 
 **The fix: asyncio.Lock with a _fired flag on every agent that must fire only once.**
 
@@ -362,16 +595,42 @@ async def handle(self, contract, deps: Deps) -> None:
 The lock ensures only one invocation can be inside the critical section at a time. The `_fired`
 flag ensures subsequent invocations exit immediately even after the lock is released.
 
-### 3.6 Gate conditions per agent
+---
+
+### 3.7 Gate conditions per agent
 
 | Agent | Gate condition | Lock needed |
 |---|---|---|
 | `RefundEligibilityAgent` | `purchase` + `complaint_type` both set | Yes |
 | `ResolutionAgent` | `refund_eligibility` + `profile` + `complaint_type` all set | Yes |
-| `ResponseComposerAgent` | receives `ResolutionOptionsContract` | Yes (defensive) |
+| `ResponseComposerAgent` | receives `ResolutionResult` | Yes (defensive) |
 
 `ResponseComposerAgent` technically only receives one contract and `ResolutionAgent` fires it
 exactly once due to its own lock. But the defensive lock is cheap and makes the invariant explicit.
+
+---
+
+### 3.8 Agent reset between requests
+
+`RefundEligibilityAgent`, `ResolutionAgent`, and `ResponseComposerAgent` carry `_fired` on
+the instance. Because agents are built once and reused across requests, `_fired = True` from
+request 1 would cause the agent to silently exit on request 2.
+
+`BaseAgent` exposes a `reset()` method — no-op by default. Agents that carry `_fired`
+override it:
+
+```python
+def reset(self) -> None:
+    self._fired = False
+```
+
+`CustomerServiceHandler.handle()` calls `reset()` on every agent before the subscribe loop:
+
+```python
+for agent in self._agents:
+    agent.reset()           # clears _fired — no-op on agents without it
+    agent.subscribe(hub, deps)
+```
 
 ---
 
@@ -381,6 +640,7 @@ exactly once due to its own lock. But the defensive lock is cheap and makes the 
 customer_service/
 ├── agents/
 │   ├── base_agent.py
+│   ├── intake_agent.py                  ← conversational intake, outside the hub
 │   ├── purchase_verification_agent.py
 │   ├── customer_history_agent.py
 │   ├── complaint_agent.py
@@ -403,19 +663,22 @@ customer_service/
 │       ├── complaint_repo.py
 │       └── policy_repo.py
 ├── schemas/
-│   ├── customer.py
-│   ├── order.py
-│   ├── complaint.py
-│   ├── policy.py
-│   └── contracts/
-│       ├── facade_contracts.py
-│       ├── customer_message.py
-│       ├── customer_message.py
-│       ├── customer_profile.py
-│       ├── customer_response.py
-│       ├── purchase_verified.py
-│       ├── refund_eligibility.py
-│       └── resolution_option.py
+│   ├── data/                            ← database-mapped Pydantic models
+│   │   ├── customer.py
+│   │   ├── order.py
+│   │   ├── complaint.py
+│   │   └── policy.py
+│   └── contracts/                       ← hub-routed contracts
+│       ├── customer_message.py          ← inbound trigger (noun payload)
+│       ├── intake_result.py             ← intake output (noun payload)
+│       ├── purchase_result.py           ← PurchaseVerificationAgent output
+│       ├── profile_result.py            ← CustomerAgent output
+│       ├── complaint_result.py          ← ComplaintAgent output
+│       ├── refund_result.py             ← RefundEligibilityAgent output
+│       ├── resolution_result.py         ← ResolutionAgent output
+│       └── customer_response.py         ← terminal output (noun payload)
+├── service/
+│   └── handler.py                       ← CustomerServiceHandler
 ├── tools/
 │   ├── agent_logger.py
 │   ├── customer_tools.py
@@ -423,6 +686,16 @@ customer_service/
 │   └── complaint_tools.py
 └── main.py
 ```
+
+`service/` sits alongside `agents/`, `core/`, and `tools/` as a peer. It contains
+`CustomerServiceHandler` — the one class that assembles the resolution cascade and drives
+a single request to completion. It is domain logic, not infrastructure, and does not
+belong in `core/`.
+
+`schemas/data/` holds the database-mapped Pydantic models (`Customer`, `SalesOrder`,
+`Policy`, etc.). `schemas/contracts/` holds the hub-routed contracts. The split prevents
+naming collisions — `ProfileResult` (contract) and `Customer` (data schema) are
+unambiguous because they live in different subpackages.
 
 ---
 
@@ -710,7 +983,7 @@ class RepoFacade:
 
 ### 6.1 Data Schemas
 
-**`schemas/customer.py`**
+**`schemas/data/customer.py`**
 
 ```python
 from pydantic import BaseModel
@@ -723,7 +996,7 @@ class Customer(BaseModel):
     joined_date: str
 ```
 
-**`schemas/order.py`**
+**`schemas/data/order.py`**
 
 ```python
 from pydantic import BaseModel
@@ -745,7 +1018,7 @@ class SalesOrder(BaseModel):
     days_since_purchase: int
 ```
 
-**`schemas/policy.py`**
+**`schemas/data/policy.py`**
 
 ```python
 from pydantic import BaseModel
@@ -763,17 +1036,39 @@ class Policy(BaseModel):
 
 **`schemas/contracts/customer_message.py`**
 ```python
-class CustomerMessageContract(BaseModel):
+from pydantic import BaseModel
+
+class CustomerMessage(BaseModel):
     message_id: str    # uuid — ties all findings for this request together
     customer_id: str
     order_id: str
-    message: str
+    message: str       # full summarised complaint from IntakeAgent
     timestamp: str
 ```
 
-**`schemas/contracts/purchases_verified.py`**
+**`schemas/contracts/intake_result.py`**
 ```python
-class PurchaseVerifiedContract(BaseModel):
+from pydantic import BaseModel
+
+class IntakeResult(BaseModel):
+    """Output contract for IntakeAgent.
+
+    ready=False — still gathering. reply is the next question to ask the customer.
+                  order_id and message are None.
+    ready=True  — enough context collected. reply is a brief handoff acknowledgement.
+                  order_id and message are fully populated.
+    """
+    ready:    bool
+    reply:    str             # always set — shown to customer every turn
+    order_id: str | None = None
+    message:  str | None = None   # full summarised complaint, set when ready=True
+```
+
+**`schemas/contracts/purchase_result.py`**
+```python
+from pydantic import BaseModel
+
+class PurchaseResult(BaseModel):
     message_id: str
     verified: bool
     order_date: str | None = None
@@ -784,9 +1079,11 @@ class PurchaseVerifiedContract(BaseModel):
     reason: str | None = None
 ```
 
-**`schemas/contracts/customer_profile.py`**
+**`schemas/contracts/profile_result.py`**
 ```python
-class CustomerProfileContract(BaseModel):
+from pydantic import BaseModel
+
+class ProfileResult(BaseModel):
     message_id: str
     customer_id: str
     tier: str
@@ -797,9 +1094,11 @@ class CustomerProfileContract(BaseModel):
     sentiment_label: str = "neutral"
 ```
 
-**`schemas/contracts/complaint_type.py`**
+**`schemas/contracts/complaint_result.py`**
 ```python
-class ComplaintTypeContract(BaseModel):
+from pydantic import BaseModel
+
+class ComplaintResult(BaseModel):
     message_id: str
     complaint_type: str        # "packaging"|"product"|"delivery"|"billing"
     severity: str              # "low"|"medium"|"high"
@@ -809,9 +1108,11 @@ class ComplaintTypeContract(BaseModel):
     wants_complaint_filed: bool
 ```
 
-**`schemas/contracts/refund_eligibility.py`**
+**`schemas/contracts/refund_result.py`**
 ```python
-class RefundEligibilityContract(BaseModel):
+from pydantic import BaseModel
+
+class RefundResult(BaseModel):
     message_id: str
     eligible: bool
     reason: str
@@ -819,9 +1120,11 @@ class RefundEligibilityContract(BaseModel):
     extended_due_to_tier: bool = False
 ```
 
-**`schemas/contracts/resolution_option.py`**
+**`schemas/contracts/resolution_result.py`**
 ```python
-class ResolutionOptionsContract(BaseModel):
+from pydantic import BaseModel
+
+class ResolutionResult(BaseModel):
     message_id: str
     options: list[str]
     recommended: str
@@ -831,7 +1134,9 @@ class ResolutionOptionsContract(BaseModel):
 
 **`schemas/contracts/customer_response.py`**
 ```python
-class CustomerResponseContract(BaseModel):
+from pydantic import BaseModel
+
+class CustomerResponse(BaseModel):
     message_id: str
     response: str
     actions_taken: list[str]
@@ -848,10 +1153,12 @@ class CustomerResponseContract(BaseModel):
 
 ```python
 from dataclasses import dataclass
-from schemas.contracts import (
-    PurchaseVerifiedContract, CustomerProfileContract, ComplaintTypeContract,
-    RefundEligibilityContract, ResolutionOptionsContract, CustomerResponseContract,
-)
+from schemas.contracts.purchase_result import PurchaseResult
+from schemas.contracts.profile_result import ProfileResult
+from schemas.contracts.complaint_result import ComplaintResult
+from schemas.contracts.refund_result import RefundResult
+from schemas.contracts.resolution_result import ResolutionResult
+from schemas.contracts.customer_response import CustomerResponse
 
 @dataclass
 class Blackboard:
@@ -859,14 +1166,14 @@ class Blackboard:
 
     Agents write here after their LLM call completes.
     Downstream agents read here to check gate conditions.
-    One instance per CustomerMessageContract. Discarded when complete.
+    One instance per CustomerMessage. Discarded when complete.
     """
-    purchase:           PurchaseResultContract  | None = None
-    profile:            CustomerResultContract   | None = None
-    complaint_type:     ComplaintRestulContract     | None = None
-    refund_eligibility: RefundResultContract | None = None
-    resolution:         ResolutionResultContract | None = None
-    response:           CustomerResponseContract  | None = None
+    purchase:           PurchaseResult  | None = None
+    profile:            ProfileResult   | None = None
+    complaint_type:     ComplaintResult | None = None
+    refund_eligibility: RefundResult    | None = None
+    resolution:         ResolutionResult| None = None
+    response:           CustomerResponse| None = None
 
     def is_complete(self) -> bool:
         return self.response is not None
@@ -889,7 +1196,7 @@ class Deps:
 
     repo         — facade grouping all repositories. Tools call ctx.deps.repo.<repo>.<method>().
     hub          — message hub. Agents publish findings through it.
-    findings     — accumulates agent output events for this request.
+    findings     — accumulates agent output contracts for this request.
     policy       — single policy config, loaded once at startup.
     message_id,
     customer_id,
@@ -898,7 +1205,7 @@ class Deps:
     """
     repo:         RepoFacade
     hub:          MessageHub
-    board:        Blalckboard
+    board:        Blackboard
     policy:       Policy
     message_id:   str
     customer_id:  str
@@ -958,7 +1265,7 @@ class MessageHub:
 def subscribe(self, hub: MessageHub, deps: Deps) -> None:
     async def handler(contract):
         await self.handle(contract, deps)   # deps captured here at subscription time
-    hub.subscribe(CustomerMessageContract, handler)
+    hub.subscribe(CustomerMessage, handler)
 ```
 
 The hub calls `handler(contract)`. The handler calls `self.handle(contract, deps)` with the captured
@@ -1102,7 +1409,7 @@ finding in `deps.board` and publishes it to the hub. No agent knows or cares wha
 agents exist.
 
 All agents that must fire only once carry an `asyncio.Lock` and a `_fired` flag. See Section
-3.5 for the full explanation of why this is mandatory.
+3.6 for the full explanation of why this is mandatory, and Section 3.8 for the reset requirement.
 
 ### 9.2 BaseAgent
 
@@ -1124,6 +1431,11 @@ class BaseAgent(ABC):
     def name(self) -> str:
         return self._name
 
+    def reset(self) -> None:
+        """Called before each request's subscribe loop.
+        No-op by default. Agents that carry _fired override this."""
+        pass
+
     @abstractmethod
     def subscribe(self, hub: MessageHub, deps: Deps) -> None: ...
 
@@ -1131,12 +1443,120 @@ class BaseAgent(ABC):
     def get_instruction(self) -> str: ...
 ```
 
-### 9.3 PurchaseVerificationAgent
+### 9.3 IntakeAgent
 
-- **Subscribes to**: `CustomerMessageContract`
+**Location**: `agents/intake_agent.py`
+
+- **Role**: Conversational intake. Sits entirely outside the observer cascade.
+- **Responsibility**: Hold a multi-turn chat with the customer until both `order_id` and a
+  complete complaint description have been collected. One question at a time. Never guess
+  or assume an `order_id`. Summarise the full conversation into `message` when `ready=True`.
+- **Output**: `IntakeResult` — returned directly to the caller on every turn, never published
+  to the hub.
+- **State**: Holds `_history` (pydantic-ai message history) across turns. Per-session — a new
+  `IntakeAgent` is created for each customer session.
+- **No `Deps`**: Does not participate in the hub. Has no access to `Blackboard`, `RepoFacade`,
+  or `Policy`.
+
+```python
+import logging
+from pydantic_ai import Agent
+
+from core.llm_factory import make_model
+from schemas.contracts.intake_result import IntakeResult
+
+logger = logging.getLogger(__name__)
+
+PROVIDER = "openai:gpt-4o-mini"
+
+
+class IntakeAgent:
+    """Conversational intake agent. Sits in front of CustomerServiceHandler.
+
+    Holds a multi-turn conversation with the customer until it has collected
+    the three things the resolution cascade requires:
+
+        - order_id     — extracted from what the customer says
+        - message      — a complete, coherent description of the complaint
+
+    customer_id is already known from the session and is not collected here.
+
+    On each turn, collect() returns an IntakeResult:
+        ready=False → still gathering; show reply to the customer and wait
+        ready=True  → hand off to CustomerServiceHandler with order_id + message
+
+    The agent never touches MessageHub, Deps, or Blackboard. It is entirely
+    outside the observer cascade and has no knowledge of it.
+    """
+
+    def __init__(self) -> None:
+        self._agent   = Agent(
+            model=make_model(PROVIDER),
+            output_type=IntakeResult,
+        )
+        self._history = []   # pydantic-ai message history — grows across turns
+
+    def _get_instruction(self, customer_id: str) -> str:
+        return f"""
+            You are a customer service intake agent for an e-commerce platform.
+            The customer's ID is {customer_id}. Do not ask for it.
+
+            Your only job is to gather enough information to handle the customer's
+            complaint. You need exactly two things:
+
+            1. order_id  — the order reference number (format: ORD-XXXX).
+                           Ask for it if the customer has not provided it.
+            2. message   — a complete, self-contained description of the complaint
+                           that covers: what happened, which product or order,
+                           and what outcome the customer is seeking (refund,
+                           replacement, complaint filed, etc.).
+
+            Rules:
+            - Ask for one thing at a time. Never ask two questions in one reply.
+            - Be warm, concise, and professional. Do not use jargon.
+            - Once you have both order_id and a complete complaint description,
+              set ready=True. Summarise the full complaint into message in plain
+              language (2-4 sentences). Set reply to a brief acknowledgement
+              that you are looking into it now.
+            - If you do not yet have both, set ready=False and set reply to
+              your next question. Leave order_id and message as null.
+            - Never make up or assume an order_id. If the customer is vague
+              ("my last order", "order from last week"), ask them to confirm
+              the order number.
+            - Do not attempt to resolve the complaint yourself. Do not offer
+              refunds, decisions, or outcomes. Your job ends when ready=True.
+        """
+
+    async def collect(self, user_input: str, customer_id: str) -> IntakeResult:
+        """Process one customer turn. Returns IntakeResult.
+
+        Call repeatedly until result.ready is True, then hand off to
+        CustomerServiceHandler using result.order_id and result.message.
+        """
+        logger.info(f"[intake] customer={customer_id} input='{user_input[:60]}...'")
+
+        result = await self._agent.run(
+            user_input,
+            message_history=self._history,
+            instructions=self._get_instruction(customer_id),
+        )
+
+        self._history = result.all_messages()
+
+        logger.info(
+            f"[intake] ready={result.output.ready} "
+            f"order_id={result.output.order_id}"
+        )
+
+        return result.output
+```
+
+### 9.4 PurchaseVerificationAgent
+
+- **Subscribes to**: `CustomerMessage`
 - **Responsibility**: Verify the order exists, belongs to this customer, is delivered, and
   determine days since purchase and what was purchased.
-- **Output**: `PurchaseVerifiedContract` → `deps.board.purchase`
+- **Output**: `PurchaseResult` → `deps.board.purchase`
 - **Tools**: `get_order_summary`, `get_order_line_items`, `get_order_total`, `log_decision`
 - **Lock**: Not needed — writes a unique findings field, never fires twice for the same field.
 
@@ -1146,7 +1566,7 @@ class PurchaseVerificationAgent(BaseAgent):
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(contract):
             await self.handle(contract, deps)
-        hub.subscribe(CustomerMessageContract, handler)
+        hub.subscribe(CustomerMessage, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1167,10 +1587,10 @@ class PurchaseVerificationAgent(BaseAgent):
             Set verified=False with a clear reason if order not found,
             not belonging to this customer, or not "delivered".
 
-            Call log_decision once. Return a PurchaseVerifiedContract.
+            Call log_decision once. Return a PurchaseResult.
         """
 
-    async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
+    async def handle(self, contract: CustomerMessage, deps: Deps) -> None:
         result = await self._agent.run(
             f"Verify purchase for order {deps.order_id} "
             f"by customer {deps.customer_id}. "
@@ -1178,17 +1598,17 @@ class PurchaseVerificationAgent(BaseAgent):
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: PurchaseVerifiedContract = result.output
+        finding: PurchaseResult = result.output
         deps.board.purchase = finding
         await deps.hub.publish(finding)
 ```
 
-### 9.4 CustomerAgent
+### 9.5 CustomerAgent
 
-- **Subscribes to**: `CustomerMessageContract`
+- **Subscribes to**: `CustomerMessage`
 - **Responsibility**: Build customer profile — tier, order count, complaint count, repeat issue
   detection. Initialises sentiment to 0.0 for `SentimentAgent` to update.
-- **Output**: `CustomerProfileContract` → `deps.board.profile`
+- **Output**: `ProfileResult` → `deps.board.profile`
 - **Tools**: `get_customer_profile`, `get_customer_order_count`, `get_recent_complaints`,
   `get_complaint_count`, `log_decision`
 - **Lock**: Not needed — writes a unique findings field.
@@ -1199,7 +1619,7 @@ class CustomerAgent(BaseAgent):
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(contract):
             await self.handle(contract, deps)
-        hub.subscribe(CustomerMessageContract, handler)
+        hub.subscribe(CustomerMessage, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1222,27 +1642,27 @@ class CustomerAgent(BaseAgent):
             Initialise sentiment_score=0.0, sentiment_label="neutral".
             SentimentAgent will update these fields independently.
 
-            Call log_decision once. Return a CustomerProfileContract.
+            Call log_decision once. Return a ProfileResult.
         """
 
-    async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
+    async def handle(self, contract: CustomerMessage, deps: Deps) -> None:
         result = await self._agent.run(
             f"Build profile for customer {deps.customer_id}. "
             f"Message context: {contract.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: CustomerProfileContract = result.output
+        finding: ProfileResult = result.output
         deps.board.profile = finding
         await deps.hub.publish(finding)
 ```
 
-### 9.5 ComplaintAgent
+### 9.6 ComplaintAgent
 
-- **Subscribes to**: `CustomerMessageContract`
+- **Subscribes to**: `CustomerMessage`
 - **Responsibility**: Classify complaint type, severity, keywords, and explicit intent flags
   from the message text. No database queries needed.
-- **Output**: `ComplaintTypeContract` → `deps.board.complaint_type`
+- **Output**: `ComplaintResult` → `deps.board.complaint_type`
 - **Tools**: `log_decision` only
 - **Lock**: Not needed — writes a unique findings field.
 
@@ -1252,7 +1672,7 @@ class ComplaintAgent(BaseAgent):
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(contract):
             await self.handle(contract, deps)
-        hub.subscribe(CustomerMessageContract, handler)
+        hub.subscribe(CustomerMessage, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1274,26 +1694,26 @@ class ComplaintAgent(BaseAgent):
               wants_replacement     customer mentions replacement or exchange
               wants_complaint_filed customer mentions complaint or report
 
-            Call log_decision once. Return a ComplaintTypeContract.
+            Call log_decision once. Return a ComplaintResult.
         """
 
-    async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
+    async def handle(self, contract: CustomerMessage, deps: Deps) -> None:
         result = await self._agent.run(
             f"Classify this complaint: {contract.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: ComplaintTypeContract = result.output
+        finding: ComplaintResult = result.output
         deps.board.complaint_type = finding
         await deps.hub.publish(finding)
 ```
 
-### 9.6 SentimentAgent
+### 9.7 SentimentAgent
 
-- **Subscribes to**: `CustomerMessageContract`
+- **Subscribes to**: `CustomerMessage`
 - **Responsibility**: Score emotional tone independently. Updates profile sentiment fields
   in place if profile is already posted. If not yet posted, the score is held until profile
-  arrives — a second subscription on `CustomerProfileContract` applies the update.
+  arrives — a second subscription on `ProfileResult` applies the update.
 - **Output**: in-place update of `deps.board.profile.sentiment_score` and `sentiment_label`
 - **Tools**: `log_decision` only
 - **Lock**: Not needed — in-place field update on an existing object, no publish.
@@ -1315,8 +1735,8 @@ class SentimentAgent(BaseAgent):
                 contract.sentiment_label = self._pending_label
                 deps.board.profile = contract
 
-        hub.subscribe(CustomerMessageContract, on_message)
-        hub.subscribe(CustomerProfileContract, on_profile)
+        hub.subscribe(CustomerMessage, on_message)
+        hub.subscribe(ProfileResult, on_profile)
 
     def get_instruction(self) -> str:
         return """
@@ -1339,7 +1759,7 @@ class SentimentAgent(BaseAgent):
             Return {"sentiment_score": float, "sentiment_label": str}.
         """
 
-    async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
+    async def handle(self, contract: CustomerMessage, deps: Deps) -> None:
         result = await self._agent.run(
             f"Score the sentiment of this message: {contract.message}",
             deps=deps,
@@ -1355,14 +1775,14 @@ class SentimentAgent(BaseAgent):
             self._pending_label = score["sentiment_label"]
 ```
 
-### 9.7 RefundEligibilityAgent
+### 9.8 RefundEligibilityAgent
 
-- **Subscribes to**: `PurchaseVerifiedContract` AND `ComplaintTypeContract`
+- **Subscribes to**: `PurchaseResult` AND `ComplaintResult`
 - **Responsibility**: Pure Python eligibility check against policy. No LLM. No database.
 - **Gate condition**: both `deps.board.purchase` and `deps.board.complaint_type` set.
-- **Lock**: Mandatory — both subscribed contract can arrive and call this handler before either
+- **Lock**: Mandatory — both subscribed contracts can arrive and call this handler before either
   has had a chance to set `_fired`, causing it to run twice without the lock.
-- **Output**: `RefundEligibilityContract` → `deps.board.refund_eligibility`
+- **Output**: `RefundResult` → `deps.board.refund_eligibility`
 
 ```python
 import asyncio
@@ -1374,11 +1794,14 @@ class RefundEligibilityAgent(BaseAgent):
         self._lock   = asyncio.Lock()
         self._fired  = False
 
+    def reset(self) -> None:
+        self._fired = False
+
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(contract):
             await self.handle(contract, deps)
-        hub.subscribe(PurchaseVerifiedContract, handler)
-        hub.subscribe(ComplaintTypeContract, handler)
+        hub.subscribe(PurchaseResult, handler)
+        hub.subscribe(ComplaintResult, handler)
 
     def get_instruction(self) -> str:
         return ""
@@ -1401,9 +1824,9 @@ class RefundEligibilityAgent(BaseAgent):
         deps.board.refund_eligibility = finding
         await deps.hub.publish(finding)
 
-    def _check(self, purchase, complaint, policy) -> RefundEligibilityContract:
+    def _check(self, purchase, complaint, policy) -> RefundResult:
         if not purchase.verified:
-            return RefundEligibilityContract(
+            return RefundResult(
                 message_id=purchase.message_id,
                 eligible=False,
                 reason="Purchase could not be verified",
@@ -1413,7 +1836,7 @@ class RefundEligibilityAgent(BaseAgent):
         days   = purchase.days_since_purchase or 0
 
         if days > window:
-            return RefundEligibilityContract(
+            return RefundResult(
                 message_id=purchase.message_id,
                 eligible=False,
                 reason=(
@@ -1423,7 +1846,7 @@ class RefundEligibilityAgent(BaseAgent):
             )
 
         auto = complaint.complaint_type in policy.auto_refund_complaint_types
-        return RefundEligibilityContract(
+        return RefundResult(
             message_id=purchase.message_id,
             eligible=True,
             reason=(
@@ -1435,12 +1858,12 @@ class RefundEligibilityAgent(BaseAgent):
         )
 ```
 
-### 9.8 ResolutionAgent
+### 9.9 ResolutionAgent
 
-- **Subscribes to**: `RefundEligibilityContract` AND `CustomerProfileContract`
+- **Subscribes to**: `RefundResult` AND `ProfileResult`
 - **Gate condition**: `refund_eligibility`, `profile`, and `complaint_type` all set.
-- **Lock**: Mandatory — both subscribed contract can call this handler before either sets `_fired`.
-- **Output**: `ResolutionOptionsContract` → `deps.board.resolution`
+- **Lock**: Mandatory — both subscribed contracts can call this handler before either sets `_fired`.
+- **Output**: `ResolutionResult` → `deps.board.resolution`
 - **Tools**: `log_decision` only — all context from `deps.board`
 
 ```python
@@ -1451,11 +1874,14 @@ class ResolutionAgent(BaseAgent):
         self._lock  = asyncio.Lock()
         self._fired = False
 
+    def reset(self) -> None:
+        self._fired = False
+
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(contract):
             await self.handle(contract, deps)
-        hub.subscribe(RefundEligibilityContract, handler)
-        hub.subscribe(CustomerProfileContract, handler)
+        hub.subscribe(RefundResult, handler)
+        hub.subscribe(ProfileResult, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1474,7 +1900,7 @@ class ResolutionAgent(BaseAgent):
             Set recommended to the single best option given all context.
             Set escalate_to_human True if "escalation" is in options.
 
-            Call log_decision once. Return a ResolutionOptionsContract.
+            Call log_decision once. Return a ResolutionResult.
         """
 
     async def handle(self, contract, deps: Deps) -> None:
@@ -1507,20 +1933,20 @@ class ResolutionAgent(BaseAgent):
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: ResolutionOptionsContract = result.output
+        finding: ResolutionResult = result.output
         deps.board.resolution = finding
         await deps.hub.publish(finding)
 ```
 
-### 9.9 ResponseComposerAgent
+### 9.10 ResponseComposerAgent
 
-- **Subscribes to**: `ResolutionOptionsContract`
+- **Subscribes to**: `ResolutionResult`
 - **Responsibility**: Compose the final customer-facing response. All upstream findings are
   guaranteed present when this agent activates because `ResolutionAgent` only fires after
   all its own gate conditions pass.
 - **Lock**: Defensive — `ResolutionAgent` fires only once due to its own lock, but the
   defensive lock here makes the invariant explicit and costs nothing.
-- **Output**: `CustomerResponseContract` → `deps.board.response`
+- **Output**: `CustomerResponse` → `deps.board.response`
 - **Tools**: `get_customer_profile`, `log_decision`
 
 ```python
@@ -1531,10 +1957,13 @@ class ResponseComposerAgent(BaseAgent):
         self._lock  = asyncio.Lock()
         self._fired = False
 
+    def reset(self) -> None:
+        self._fired = False
+
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(contract):
             await self.handle(contract, deps)
-        hub.subscribe(ResolutionOptionsContract, handler)
+        hub.subscribe(ResolutionResult, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1555,10 +1984,10 @@ class ResponseComposerAgent(BaseAgent):
             - Plain language only. No corporate jargon.
             - Under 150 words.
 
-            Call log_decision once. Return a CustomerResponseContract.
+            Call log_decision once. Return a CustomerResponse.
         """
 
-    async def handle(self, contract: ResolutionOptionsContract, deps: Deps) -> None:
+    async def handle(self, contract: ResolutionResult, deps: Deps) -> None:
         async with self._lock:
             if self._fired:
                 return
@@ -1582,21 +2011,29 @@ class ResponseComposerAgent(BaseAgent):
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: CustomerResponseContract = result.output
+        finding: CustomerResponse = result.output
         deps.board.response = finding
         await deps.hub.publish(finding)
 ```
 
 ---
 
-## 10. main.py
+## 10. Service Layer
+
+### 10.1 CustomerServiceHandler
+
+**Location**: `service/handler.py`
+
+`CustomerServiceHandler` owns the resolution cascade end-to-end. It is built once at startup
+and reused across all requests. Agents and their underlying pydantic-ai `Agent` instances are
+constructed once in `_build_agents()` — they carry no per-request state themselves.
+
+Per-request state (`MessageHub`, `Blackboard`, `Deps`) is created fresh inside `handle()` on
+every call. Stateful agents (`RefundEligibilityAgent`, `ResolutionAgent`,
+`ResponseComposerAgent`) are reset before each subscribe loop via `agent.reset()`.
 
 ```python
-import asyncio
-import json
-import uuid
-from datetime import datetime
-
+import logging
 from pydantic_ai import Agent
 
 from agents.purchase_verification_agent import PurchaseVerificationAgent
@@ -1609,19 +2046,19 @@ from agents.response_composer_agent import ResponseComposerAgent
 
 from core.message_hub import MessageHub
 from core.deps import Deps
-from core.blackboard import Blackboard
+from core.board import Blackboard
 from core.llm_factory import make_model
-from core.logger import logger
 
-from db.connection import Database
 from db.repositories.facade import RepoFacade
-from db.repositories.policy_repo import PolicyRepository
+from schemas.data.policy import Policy
+from schemas.contracts.customer_message import CustomerMessage
 
-from schemas.contract.inbound import CustomerMessageContract
-from schemas.contract.findings import (
-    PurchaseVerifiedContract, CustomerProfileContract, ComplaintTypeContract,
-    RefundEligibilityContract, ResolutionOptionsContract, CustomerResponseContract,
-)
+from schemas.contracts.purchase_result import PurchaseResult
+from schemas.contracts.profile_result import ProfileResult
+from schemas.contracts.complaint_result import ComplaintResult
+from schemas.contracts.refund_result import RefundResult
+from schemas.contracts.resolution_result import ResolutionResult
+from schemas.contracts.customer_response import CustomerResponse
 
 from tools.agent_logger import log_decision
 from tools.customer_tools import get_customer_profile
@@ -1631,137 +2068,199 @@ from tools.order_tools import (
 )
 from tools.complaint_tools import get_recent_complaints, get_complaint_count
 
+logger = logging.getLogger(__name__)
+
 PROVIDER = "openai:gpt-4o-mini"
 
 
-async def handle_customer_message(
-    message: CustomerMessageContract,
-    repo: RepoFacade,
-    policy,
-) -> dict:
-    hub   = MessageHub()
-    board = Blalckboard()
+class CustomerServiceHandler:
+    """Resolves a customer message end-to-end using the Observer fan-out pattern.
 
-    deps = Deps(
-        repo=repo,
-        hub=hub,
-        board=board,
-        policy=policy,
-        message_id=message.message_id,
-        customer_id=message.customer_id,
-        order_id=message.order_id,
-        total_tokens=0,
-    )
+    Built once at startup. Agents and their underlying LLM wrappers are
+    constructed once and reused across all calls.
 
-    purchase_agent = PurchaseVerificationAgent(
-        name="purchase_verification",
-        agent=Agent(
-            model=make_model(PROVIDER), deps_type=Deps,
-            output_type=PurchaseVerifiedContract,
-            tools=[log_decision, get_order_summary,
-                   get_order_line_items, get_order_total],
-        ),
-    )
-    customer_agent = CustomerAgent(
-        name="customer_agent",
-        agent=Agent(
-            model=make_model(PROVIDER), deps_type=Deps,
-            output_type=CustomerProfileContract,
-            tools=[log_decision, get_customer_profile,
-                   get_customer_order_count,
-                   get_recent_complaints, get_complaint_count],
-        ),
-    )
-    complaint_agent = ComplaintAgent(
-        name="complaint_agent",
-        agent=Agent(
-            model=make_model(PROVIDER), deps_type=Deps,
-            output_type=ComplaintTypeContract,
-            tools=[log_decision],
-        ),
-    )
-    sentiment_agent = SentimentAgent(
-        name="sentiment",
-        agent=Agent(
-            model=make_model(PROVIDER), deps_type=Deps,
-            output_type=dict,
-            tools=[log_decision],
-        ),
-    )
-    refund_agent = RefundEligibilityAgent(name="refund_eligibility")
-    resolution_agent = ResolutionAgent(
-        name="resolution",
-        agent=Agent(
-            model=make_model(PROVIDER), deps_type=Deps,
-            output_type=ResolutionOptionsContract,
-            tools=[log_decision],
-        ),
-    )
-    composer_agent = ResponseComposerAgent(
-        name="response_composer",
-        agent=Agent(
-            model=make_model(PROVIDER), deps_type=Deps,
-            output_type=CustomerResponseContract,
-            tools=[log_decision, get_customer_profile],
-        ),
-    )
+    Per-request state (MessageHub, Blackboard, Deps) is created fresh inside
+    handle() — never shared between calls.
+    """
 
-    # Subscribe all agents — this builds the hub dictionary.
-    # Each agent appends its handler to the list for its contract type.
-    # Nothing runs here. The dictionary is just populated.
-    for agent in [
-        purchase_agent,
-        customer_agent,
-        complaint_agent,
-        sentiment_agent,
-        refund_agent,
-        resolution_agent,
-        composer_agent,
-    ]:
-        agent.subscribe(hub, deps)
+    def __init__(self, repo: RepoFacade, policy: Policy) -> None:
+        self._repo   = repo
+        self._policy = policy
+        self._agents = self._build_agents()
 
-    # Single publish call kicks off the entire cascade.
-    # hub.publish() looks up CustomerMessageContract in the dictionary,
-    # finds 4 handlers, and calls asyncio.gather() on them.
-    # This call does not return until deps.board.response is set.
-    logger.info(f"[{message.message_id}] cascade start")
-    await hub.publish(message)
-    logger.info(f"[{message.message_id}] cascade complete")
+    def _build_agents(self) -> list:
+        """Construct all agents once. Agent instances are stateless across
+        requests — all mutable state lives in Deps, which is per-request."""
+        return [
+            PurchaseVerificationAgent(
+                name="purchase_verification",
+                agent=Agent(
+                    model=make_model(PROVIDER), deps_type=Deps,
+                    output_type=PurchaseResult,
+                    tools=[log_decision, get_order_summary,
+                           get_order_line_items, get_order_total],
+                ),
+            ),
+            CustomerAgent(
+                name="customer_history",
+                agent=Agent(
+                    model=make_model(PROVIDER), deps_type=Deps,
+                    output_type=ProfileResult,
+                    tools=[log_decision, get_customer_profile,
+                           get_customer_order_count,
+                           get_recent_complaints, get_complaint_count],
+                ),
+            ),
+            ComplaintAgent(
+                name="complaint_agent",
+                agent=Agent(
+                    model=make_model(PROVIDER), deps_type=Deps,
+                    output_type=ComplaintResult,
+                    tools=[log_decision],
+                ),
+            ),
+            SentimentAgent(
+                name="sentiment",
+                agent=Agent(
+                    model=make_model(PROVIDER), deps_type=Deps,
+                    output_type=dict,
+                    tools=[log_decision],
+                ),
+            ),
+            RefundEligibilityAgent(
+                name="refund_eligibility",
+            ),
+            ResolutionAgent(
+                name="resolution",
+                agent=Agent(
+                    model=make_model(PROVIDER), deps_type=Deps,
+                    output_type=ResolutionResult,
+                    tools=[log_decision],
+                ),
+            ),
+            ResponseComposerAgent(
+                name="response_composer",
+                agent=Agent(
+                    model=make_model(PROVIDER), deps_type=Deps,
+                    output_type=CustomerResponse,
+                    tools=[log_decision, get_customer_profile],
+                ),
+            ),
+        ]
 
-    response = deps.board.response
-    return {
-        "resolved":      response.resolved      if response else False,
-        "response":      response.response       if response else "System error",
-        "actions_taken": response.actions_taken  if response else [],
-        "total_tokens":  deps.total_tokens,
-    }
+    async def handle(self, message: CustomerMessage) -> dict:
+        """Handle one customer message. Returns a result dict.
+
+        Creates a fresh MessageHub, Blackboard, and Deps for this request.
+        Resets stateful agents, subscribes all agents to the hub, then fires
+        the single publish() call that triggers the entire agent cascade.
+        """
+        hub   = MessageHub()
+        board = Blackboard()
+        deps  = Deps(
+            repo=self._repo,
+            hub=hub,
+            board=board,
+            policy=self._policy,
+            message_id=message.message_id,
+            customer_id=message.customer_id,
+            order_id=message.order_id,
+            total_tokens=0,
+        )
+
+        # Reset stateful agents and build the subscription dictionary.
+        # Each agent appends its handler to the list for its contract type.
+        # Nothing runs here — the hub is just wired up.
+        for agent in self._agents:
+            agent.reset()
+            agent.subscribe(hub, deps)
+
+        # Single publish call triggers the entire cascade.
+        # Does not return until deps.board.response is set.
+        logger.info(f"[{message.message_id}] cascade start")
+        await hub.publish(message)
+        logger.info(f"[{message.message_id}] cascade complete")
+
+        response = deps.board.response
+        return {
+            "resolved":      response.resolved      if response else False,
+            "response":      response.response       if response else "System error",
+            "actions_taken": response.actions_taken  if response else [],
+            "total_tokens":  deps.total_tokens,
+        }
+```
+
+---
+
+## 11. main.py
+
+```python
+import asyncio
+import json
+import uuid
+from datetime import datetime
+
+from db.connection import Database
+from db.repositories.facade import RepoFacade
+from db.repositories.policy_repo import PolicyRepository
+
+from schemas.contracts.customer_message import CustomerMessage
+
+from agents.intake_agent import IntakeAgent
+from service.handler import CustomerServiceHandler
+
+CUSTOMER_ID = "C001"   # in production: resolved from auth / session
 
 
-async def main():
+async def main() -> None:
     await Database.get_pool()
 
-    repo   = RepoFacade()
-    policy = await PolicyRepository().get()
+    repo    = RepoFacade()
+    policy  = await PolicyRepository().get()
+    handler = CustomerServiceHandler(repo, policy)
 
     try:
-        message = CustomerMessageContract(
+        await chat(handler)
+    finally:
+        await Database.close()
+
+
+async def chat(handler: CustomerServiceHandler) -> None:
+    """Intake loop. Runs until the customer's complaint is fully resolved.
+
+    IntakeAgent holds a multi-turn conversation, accumulating context across
+    turns via its own _history. When it signals ready=True, a CustomerMessage
+    is constructed from the collected context and handed to CustomerServiceHandler.
+    The resolution cascade fires once on the complete, summarised complaint.
+    """
+    intake = IntakeAgent()
+
+    print("Agent: Hi, how can I help you today?")
+
+    while True:
+        user_input = input("Customer: ").strip()
+        if not user_input:
+            continue
+
+        intake_result = await intake.collect(user_input, customer_id=CUSTOMER_ID)
+        print(f"Agent: {intake_result.reply}")
+
+        if not intake_result.ready:
+            continue
+
+        # IntakeAgent has collected order_id and a complete complaint description.
+        # Hand off to CustomerServiceHandler for the full resolution cascade.
+        message = CustomerMessage(
             message_id=str(uuid.uuid4()),
-            customer_id="C001",
-            order_id="ORD-1001",
-            message=(
-                "Hi, I bought a keyboard last month but when it arrived the packaging "
-                "was completely crushed and one of the keys is already not working. "
-                "I never had this problem with you before. This is really frustrating. "
-                "Can I get a refund or at least file a complaint about this?"
-            ),
+            customer_id=CUSTOMER_ID,
+            order_id=intake_result.order_id,
+            message=intake_result.message,
             timestamp=datetime.now().isoformat(),
         )
 
-        result = await handle_customer_message(message, repo, policy)
+        result = await handler.handle(message)
         print(json.dumps(result, indent=2))
-
-    finally:
-        await Database.close()
+        break
 
 
 asyncio.run(main())
@@ -1769,7 +2268,7 @@ asyncio.run(main())
 
 ---
 
-## 11. Implementation Sequence
+## 12. Implementation Sequence
 
 **Phase 1 — Database** (`db/`)
 
@@ -1781,7 +2280,9 @@ directly: `get_order` with mismatched `customer_id` returns `None`, `get_history
 **Phase 2 — Schemas** (`schemas/`)
 
 Instantiate each schema with dummy data, round-trip `model_dump()` / `model_validate()`.
-All contract schemas carry `message_id`. No schema has methods.
+All contract schemas carry `message_id`. No schema has methods. Confirm `IntakeResult`
+round-trips with both `ready=False` (order_id and message are None) and `ready=True`
+(all fields populated).
 
 **Phase 3 — MessageHub** (`core/message_hub.py`)
 
@@ -1803,31 +2304,48 @@ error dict for a non-existent order, `get_recent_complaints` never returns more 
 
 Build first — no LLM. Test `_check()` directly against all branches: purchase not verified,
 outside window, auto-approved type, standard eligible. Manually trigger `handle()` twice
-simultaneously and confirm `_fired` prevents double-posting.
+simultaneously and confirm `_fired` prevents double-posting. Confirm `reset()` clears
+`_fired` and the agent fires correctly on a second request.
 
-**Phase 7 — Phase 1 agents** (`agents/`)
+**Phase 7 — Phase 1 resolution agents** (`agents/`)
 
 Build in order: `ComplaintAgent` → `PurchaseVerificationAgent` →
 `CustomerAgent` → `SentimentAgent`. For each: subscribe to a live hub with deps,
-call `hub.publish(CustomerMessageContract)`, confirm finding posted to `deps.board` and
+call `hub.publish(CustomerMessage)`, confirm finding posted to `deps.board` and
 published to hub.
 
-**Phase 8 — Phase 2 agents** (`agents/`)
+**Phase 8 — Phase 2 resolution agents** (`agents/`)
 
 Build in order: `ResolutionAgent` → `ResponseComposerAgent`. Confirm gate exits silently when
 findings missing. With all required findings set, confirm agent activates, calls LLM, posts
 finding. Manually test lock: call `handle()` twice in quick succession, confirm second call
-is a no-op.
+is a no-op. Confirm `reset()` allows the agent to fire again on the next request.
 
-**Phase 9 — Integration** (`main.py`)
+**Phase 9 — CustomerServiceHandler** (`service/`)
 
-Run end-to-end with sample message. Confirm: the 4 handlers for `CustomerMessageContract` start
-concurrently, `log_decision` lines appear for all LLM agents, `RefundEligibilityAgent` produces
-no token lines, `CustomerResponseContract` is the final output with `resolved=True`.
+Test with a fully formed `CustomerMessage` (bypassing intake). Confirm: the 4 handlers for
+`CustomerMessage` start concurrently, `log_decision` lines appear for all LLM agents,
+`RefundEligibilityAgent` produces no token lines, `CustomerResponse` is the final output
+with `resolved=True`. Run two requests in sequence and confirm `reset()` prevents `_fired`
+leaking between them.
+
+**Phase 10 — IntakeAgent** (`agents/`)
+
+Test `collect()` in isolation with a sequence of simulated customer turns. Confirm
+`ready=False` until both `order_id` and a complete complaint are present. Confirm
+`ready=True` populates `order_id` and `message`. Confirm `_history` grows correctly
+across turns — the LLM sees the full thread on every call.
+
+**Phase 11 — Integration** (`main.py`)
+
+Run end-to-end with a multi-turn chat. Confirm: `IntakeAgent` asks one question at a time,
+`ready=True` is only signalled when both `order_id` and complaint are collected,
+`CustomerServiceHandler` fires the cascade exactly once on the summarised `message`, and
+the final `CustomerResponse` is printed with `resolved=True`.
 
 ---
 
-## 12. Expected Output
+## 13. Expected Output
 
 ### Success
 

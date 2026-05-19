@@ -39,8 +39,8 @@ There are seven agents. `main.py` is the orchestrator.
 | Agent | Phase | Reads from findings | Writes to findings |
 |---|---|---|---|
 | `PurchaseVerificationAgent` | 1 | — | `board.purchase` |
-| `CustomerHistoryAgent` | 1 | — | `board.profile` |
-| `ComplaintClassificationAgent` | 1 | — | `board.complaint_type` |
+| `CustomerAgent` | 1 | — | `board.profile` |
+| `ComplaintAgent` | 1 | — | `board.complaint_type` |
 | `SentimentAgent` | 1 | `board.profile` | `board.profile.sentiment_*` |
 | `RefundEligibilityAgent` | 2 | `board.purchase` + `board.complaint_type` | `board.refund_eligibility` |
 | `ResolutionAgent` | 2 | `board.purchase` + `board.profile` + `board.complaint_type` + `board.refund_eligibility` | `board.resolution` |
@@ -64,7 +64,7 @@ yield, and when race conditions are possible determines the entire correctness o
 await asyncio.gather(
     purchase_agent.run(message, findings, deps),
     history_agent.run(message, findings, deps),
-    classification_agent.run(message, findings, deps),
+    complaint_agent.run(message, findings, deps),
     sentiment_agent.run(message, findings, deps),
 )
 ````
@@ -133,7 +133,7 @@ customer_service/
 │   ├── base_agent.py
 │   ├── purchase_verification_agent.py
 │   ├── customer_history_agent.py
-│   ├── complaint_classification_agent.py
+│   ├── complaint_agent.py
 │   ├── sentiment_agent.py
 │   ├── refund_eligibility_agent.py
 │   ├── resolution_agent.py
@@ -755,7 +755,7 @@ async def get_complaint_count(ctx: RunContext[Deps]) -> str:
 
 ### 8.6 Tool registration per agent
 
-| Tool | PurchaseVerification | CustomerHistory | ComplaintClassification | Sentiment | RefundEligibility | Resolution | ResponseComposer |
+| Tool | PurchaseVerification | CustomerAgent | ComplaintAgent | Sentiment | RefundEligibility | Resolution | ResponseComposer |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | `log_decision` | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ |
 | `get_customer_profile` | — | ✓ | — | — | — | — | ✓ |
@@ -859,7 +859,7 @@ class PurchaseVerificationAgent(BaseAgent):
 
 ---
 
-### 9.4 CustomerHistoryAgent
+### 9.4 CustomerAgent
 **Location**: `agents/customer_history_agent.py`
 
 - **Reads**: `message.customer_id`
@@ -867,11 +867,11 @@ class PurchaseVerificationAgent(BaseAgent):
 - **Tools**: `get_customer_profile`, `get_customer_order_count`, `get_recent_complaints`, `get_complaint_count`, `log_decision`
 
 ````python
-class CustomerHistoryAgent(BaseAgent):
+class CustomerAgent(BaseAgent):
 
     def get_instruction(self) -> str:
         return """
-            You are the CustomerHistoryAgent in a customer service system.
+            You are the CustomerAgent in a customer service system.
             Build a profile of this customer from their history.
 
             Use your tools to:
@@ -904,19 +904,19 @@ class CustomerHistoryAgent(BaseAgent):
 
 ---
 
-### 9.5 ComplaintClassificationAgent
-**Location**: `agents/complaint_classification_agent.py`
+### 9.5 ComplaintAgent
+**Location**: `agents/complaint_agent.py`
 
 - **Reads**: `message.message`
 - **Writes**: `board.complaint_type`
 - **Tools**: `log_decision`
 
 ````python
-class ComplaintClassificationAgent(BaseAgent):
+class ComplaintAgent(BaseAgent):
 
     def get_instruction(self) -> str:
         return """
-            You are the ComplaintClassificationAgent.
+            You are the ComplaintAgent.
             Classify the customer complaint from the message text only.
 
             complaint_type — exactly one of:
@@ -1142,8 +1142,8 @@ import uuid
 from datetime import datetime
 
 from agents.purchase_verification_agent import PurchaseVerificationAgent
-from agents.customer_history_agent import CustomerHistoryAgent
-from agents.complaint_classification_agent import ComplaintClassificationAgent
+from agents.customer_history_agent import CustomerAgent
+from agents.complaint_agent import ComplaintAgent
 from agents.sentiment_agent import SentimentAgent
 from agents.refund_eligibility_agent import RefundEligibilityAgent
 from agents.resolution_agent import ResolutionAgent
@@ -1182,7 +1182,7 @@ purchase_agent = PurchaseVerificationAgent(
         tools=[log_decision, get_order_summary, get_order_line_items, get_order_total],
     ),
 )
-history_agent = CustomerHistoryAgent(
+history_agent = CustomerAgent(
     name="customer_history",
     agent=Agent(
         model=make_model(PROVIDER), deps_type=Deps,
@@ -1191,8 +1191,8 @@ history_agent = CustomerHistoryAgent(
                get_recent_complaints, get_complaint_count],
     ),
 )
-classification_agent = ComplaintClassificationAgent(
-    name="complaint_classification",
+complaint_agent = ComplaintAgent(
+    name="complaint_agent",
     agent=Agent(
         model=make_model(PROVIDER), deps_type=Deps,
         output_type=ComplaintTypeEvent,
@@ -1244,7 +1244,7 @@ async def handle_customer_message(message: CustomerMessageEvent, repo: RepoFacad
     await asyncio.gather(
         purchase_agent.run(message, board, deps),
         history_agent.run(message, board, deps),
-        classification_agent.run(message, board, deps),
+        complaint_agent.run(message, board, deps),
         sentiment_agent.run(message, board, deps),
     )
     logger.info(f"[{message.message_id}] phase 1 complete")
@@ -1316,8 +1316,8 @@ outside window, auto-approved type, standard eligible.
 
 **Phase 6 — Phase 1 agents** (`agents/`)
 - Build in order: 
-  - `ComplaintClassificationAgent` → `PurchaseVerificationAgent` →
-`CustomerHistoryAgent` → `SentimentAgent`. 
+  - `ComplaintAgent` → `PurchaseVerificationAgent` →
+`CustomerAgent` → `SentimentAgent`. 
   - For each: call `agent.run(message, findings, deps)`
 directly and confirm the correct field is written to `board`.
 

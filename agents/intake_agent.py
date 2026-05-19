@@ -1,17 +1,16 @@
 import logging
 from pydantic_ai import Agent
 
-from schemas.contracts.intake_result import IntakeResultContract
+from core.llm_factory import make_model
+from schemas.intake_result import IntakeResult
 
 logger = logging.getLogger(__name__)
 
-
 class IntakeAgent:
-    """
-    Conversational intake agent. Sits in front of CustomerServiceHandler.
+    """Conversational intake agent. Sits in front of CustomerServiceHandler.
 
     Holds a multi-turn conversation with the customer until it has collected
-    the three things the resolution cascade requires:
+    the two things the resolution cascade requires:
 
         - order_id     — extracted from what the customer says
         - message      — a complete, coherent description of the complaint
@@ -27,9 +26,9 @@ class IntakeAgent:
     """
 
     def __init__(self, model) -> None:
-        self._agent = Agent(
+        self._agent   = Agent(
             model=model,
-            output_type=IntakeResultContract,
+            output_type=IntakeResult,
         )
         self._history = []   # pydantic-ai message history — grows across turns
 
@@ -52,22 +51,20 @@ class IntakeAgent:
             - Ask for one thing at a time. Never ask two questions in one reply.
             - Be warm, concise, and professional. Do not use jargon.
             - Once you have both order_id and a complete complaint description,
-              set ready=True. 
-            - Summarise the full complaint into message in plain
-              language (2-4 sentences). 
-            - Set reply to a brief acknowledgement that you are looking into it now.
+              set ready=True. Summarise the full complaint into message in plain
+              language (2-4 sentences). Set reply to a brief acknowledgement
+              that you are looking into it now.
             - If you do not yet have both, set ready=False and set reply to
               your next question. Leave order_id and message as null.
             - Never make up or assume an order_id. If the customer is vague
               ("my last order", "order from last week"), ask them to confirm
               the order number.
-            - Do not attempt to resolve the complaint yourself. 
-            - Do not offer refunds, decisions, or outcomes. Your job ends when ready=True.
+            - Do not attempt to resolve the complaint yourself. Do not offer
+              refunds, decisions, or outcomes. Your job ends when ready=True.
         """
 
-    async def collect(self, user_input: str, customer_id: str) -> IntakeResultContract:
-        """
-        Process one customer turn. Returns IntakeResult.
+    async def collect(self, user_input: str, customer_id: str) -> IntakeResult:
+        """Process one customer turn. Returns IntakeResult.
 
         Call repeatedly until result.ready is True, then hand off to
         CustomerServiceHandler using result.order_id and result.message.

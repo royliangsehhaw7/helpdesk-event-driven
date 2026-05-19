@@ -2,19 +2,20 @@ from agents.base_agent import BaseAgent
 from core.deps import Deps
 from core.message_hub import MessageHub
 
-from schemas.contracts.customer_message import CustomerMessageContract
-from schemas.contracts.profile_result import CustomerProfileContract
+from schemas.messages.service_request import CustomerMessageContract
+from schemas.messages.profile_result import CustomerProfileContract
 
-class CustomerHistoryAgent(BaseAgent):
+class ProfileAgent(BaseAgent):
 
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(event):
             await self.handle(event, deps)
+        
         hub.subscribe(CustomerMessageContract, handler)
 
     def get_instruction(self) -> str:
         return """
-            You are the CustomerHistoryAgent in a customer service system.
+            You are the ProfileAgent of a customer in a customer service system.
             Build a profile of this customer from their history.
 
             Use your tools to:

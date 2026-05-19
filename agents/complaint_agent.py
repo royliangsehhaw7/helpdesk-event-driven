@@ -2,10 +2,10 @@ from agents.base_agent import BaseAgent
 from core.message_hub import MessageHub
 from core.deps import Deps
 
-from schemas.contracts.customer_message import CustomerMessageContract
-from schemas.contracts.complaint_result import ComplaintTypeContract
+from schemas.messages.service_request import CustomerMessageContract
+from schemas.messages.complaint_result import ComplaintTypeContract
 
-class ComplaintClassificationAgent(BaseAgent):
+class ComplaintAgent(BaseAgent):
 
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(event):
@@ -14,7 +14,7 @@ class ComplaintClassificationAgent(BaseAgent):
 
     def get_instruction(self) -> str:
         return """
-            You are the ComplaintClassificationAgent.
+            You are the ComplaintAgent.
             Classify the customer complaint from the message text only.
 
             complaint_type — exactly one of:

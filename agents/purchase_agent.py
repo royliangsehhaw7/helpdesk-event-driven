@@ -2,10 +2,9 @@
 from .base_agent import BaseAgent
 from core.deps import Deps
 from core.message_hub import MessageHub
-from schemas.contracts.customer_message import CustomerMessageContract
-from schemas.contracts.purchase_result import PurchaseVerifiedContract
+from schemas.messages import CustomerMessageContract, ServiceRequestContract
 
-class PurchaseVerificationAgent(BaseAgent):
+class PurchaseAgent(BaseAgent):
 
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(event):
@@ -16,7 +15,7 @@ class PurchaseVerificationAgent(BaseAgent):
 
     def get_instruction(self) -> str:
         return """
-            You are the PurchaseVerificationAgent in a customer service system.
+            You are the PurchaseAgent in a customer service system.
             Your sole job is to verify the customer's purchase claim.
 
             Use your tools to:
@@ -38,16 +37,17 @@ class PurchaseVerificationAgent(BaseAgent):
         """
 
 
-    async def handle(self, event: CustomerMessageContract, deps: Deps) -> None:
+    async def handle(self, event: ServiceRequestContract, deps: Deps) -> None:
         result = await self._agent.run(f"""
-            Verify purchase for order {deps.order_id}
-            by customer {deps.customer_id}
-            Customer message: {event.message}
+                Verify purchase for order {deps.order_id} by customer {deps.customer_id}
+                Customer message: {event.message}
             """,
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: PurchaseVerifiedContract = result.output
+        finding: ServiceRequestContract = result.output
         deps.board.purchase = finding
         
+        # -- rightfully we should be publising a contract 
         await deps.hub.publish(finding)
+

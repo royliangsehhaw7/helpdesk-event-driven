@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-class IntakeResultContract(BaseModel):
+class IntakeResultMessage(BaseModel):
     """
     Output contract for IntakeAgent.
 

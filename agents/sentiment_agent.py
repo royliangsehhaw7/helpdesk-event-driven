@@ -2,8 +2,8 @@
 from agents.base_agent import BaseAgent
 from core import Deps, MessageHub, Blackboard
 
-from schemas.contracts.customer_message import CustomerMessageContract
-from schemas.contracts.profile_result import CustomerProfileContract
+from schemas.messages.service_request import CustomerMessageContract
+from schemas.messages.profile_result import CustomerProfileContract
 
 
 class SentimentAgent(BaseAgent):

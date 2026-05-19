@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from schemas.contracts import (
+from schemas.messages import (
     PurchaseResultContract, 
     ProfileResultContract,
     ComplaintResultContract,
@@ -15,15 +15,15 @@ class Blackboard:
 
     Agents write here after their LLM call completes.
     Downstream agents read here to check gate conditions.
-    One instance per CustomerMessageContract. Discarded when complete.
+    One instance per CustomerResponseContract. Discarded when complete.
     """
 
-    purchase:           PurchaseResultContract  | None = None
-    profile:            ProfileResultContract   | None = None
-    complaint_type:     ComplaintResultContract     | None = None
-    refund_eligibility: RefundResultContract | None = None
+    purchase:           PurchaseResultContract   | None = None
+    profile:            ProfileResultContract    | None = None
+    complaint_type:     ComplaintResultContract  | None = None
+    refund_eligibility: RefundResultContract     | None = None
     resolution:         ResolutionResultContract | None = None
-    response:           CustomerResponseContract  | None = None
+    response:           CustomerResponseContract | None = None
 
 
     def is_complete(self) -> bool:
