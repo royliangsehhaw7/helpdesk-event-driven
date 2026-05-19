@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from pydantic_ai import Agent
-from bus.event_bus import EventBus
+
 from core.deps import Deps
+from core.message_hub import MessageHub
 
 
 class BaseAgent(ABC):
@@ -14,7 +15,9 @@ class BaseAgent(ABC):
         return self._name
 
     @abstractmethod
-    def subscribe(self, bus: EventBus, deps: Deps) -> None: ...
+    def subscribe(self, hub: MessageHub, deps: Deps) -> None: 
+        ...
 
     @abstractmethod
-    def get_instruction(self) -> str: ...
+    def get_instruction(self) -> str: 
+        ...

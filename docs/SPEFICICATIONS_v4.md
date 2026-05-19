@@ -1,5 +1,5 @@
 # Multi-Agent Customer Service System
-## Specification v3.0 — Observer / Event-Driven Pattern with Tool-Based Data Access
+## Specification v4.0 — Observer / Event-Driven Pattern with Tool-Based Data Access
 
 ---
 
@@ -18,15 +18,17 @@ properly.
 
 This system implements the **Observer Pattern with Event-Driven Agent Fan-out**.
 
-An `EventBus` fans incoming customer message events out to all Phase 1 analysis agents
-simultaneously via `asyncio.gather()`. Each agent activates independently, queries MySQL through
-its tools via the `RepoFacade`, posts its finding to `deps.findings`, and publishes a new event
-to the bus. Phase 2 synthesis agents subscribe to those finding events, check gate conditions
-protected by `asyncio.Lock`, and activate only when all required findings are present and only
-once per request regardless of how many subscribed events arrive.
+An `MessageHub` is a dictionary that maps contract types to lists of handler functions. When
+`hub.publish(contract)` is called, the bus looks up the contract type in its dictionary, finds all
+registered handlers, and calls them all via `asyncio.gather()`.
 
-No agent is told to go. No orchestrator sequences the work. The cascade emerges from
-subscriptions and gate conditions alone.
+Agents register themselves into that dictionary at startup by calling `subscribe()`. Each agent
+tells the message bus which contract type it wants to listen to. From that point on, whenever that contract 
+type is published, the bus calls that agent's handler.
+
+No agent is told to go by an orchestrator. No scheduler sequences the work. Each agent fires
+the moment the message bus calls its handler — and whether it does real work or exits silently depends
+entirely on its own internal gate condition.
 
 ### 2.2 Why no Blackboard
 
@@ -36,272 +38,340 @@ analysis. This system's source data — customers, orders, complaint history —
 structured, queryable facts in MySQL. Agents query them on demand through tools. The
 `BlackBoard` class is removed entirely.
 
-The only accumulation need — storing agent findings so Phase 2 agents can read Phase 1 outputs
-— is handled by `Findings`, a plain typed dataclass on `Deps`. It is a result accumulator, not
+The only accumulation need — storing agent findings so downstream agents can read them —
+is handled by `Blackboard`, a plain typed dataclass on `Deps`. It is a result accumulator, not
 a blackboard.
 
 ### 2.3 Agents
 
 There are seven agents. There is no orchestrator. There is no scheduler loop.
 
-| Agent | Phase | Subscribes to | Posts |
-|---|---|---|---|
-| `PurchaseVerificationAgent` | 1 | `CustomerMessageEvent` | `PurchaseVerifiedEvent` |
-| `CustomerHistoryAgent` | 1 | `CustomerMessageEvent` | `CustomerProfileEvent` |
-| `ComplaintClassificationAgent` | 1 | `CustomerMessageEvent` | `ComplaintTypeEvent` |
-| `SentimentAgent` | 1 | `CustomerMessageEvent` | updates `findings.profile.sentiment_*` |
-| `RefundEligibilityAgent` | 2 | `PurchaseVerifiedEvent` + `ComplaintTypeEvent` | `RefundEligibilityEvent` |
-| `ResolutionAgent` | 2 | `RefundEligibilityEvent` + `CustomerProfileEvent` | `ResolutionOptionsEvent` |
-| `ResponseComposerAgent` | 2 | `ResolutionOptionsEvent` | `CustomerResponseEvent` |
+| Agent | Subscribes to | Posts |
+|---|---|---|
+| `PurchaseVerificationAgent` | `CustomerMessageContract` | `PurchaseVerifiedContract` |
+| `CustomerHistoryAgent` | `CustomerMessageContract` | `CustomerProfileContract` |
+| `ComplaintClassificationAgent` | `CustomerMessageContract` | `ComplaintTypeContract` |
+| `SentimentAgent` | `CustomerMessageContract` | updates `findings.profile.sentiment_*` |
+| `RefundEligibilityAgent` | `PurchaseVerifiedContract` + `ComplaintTypeContract` | `RefundEligibilityContract` |
+| `ResolutionAgent` | `RefundEligibilityContract` + `CustomerProfileContract` | `ResolutionOptionsContract` |
+| `ResponseComposerAgent` | `ResolutionOptionsContract` | `CustomerResponseContract` |
 
 ---
 
 ## 3. Execution Model
 
-This is the most important section to understand before writing a single line of agent code.
-Python's `asyncio` is **single-threaded**. There are no real threads. Parallelism is achieved
-by interleaving coroutines at `await` points. Understanding exactly when agents run, when they
-yield, and when race conditions are possible determines the entire correctness of the system.
+### 3.1 What the MessageHub actually is
 
-### 3.1 What asyncio.gather() actually does
+The `MessageHub` is a dictionary and a `asyncio.gather()` call. Nothing more.
+
+```python
+# The entire state of the hub after all subscribe() calls:
+{
+    CustomerMessageContract:   [purchase_handler, history_handler, classification_handler, sentiment_handler],
+    PurchaseVerifiedContract:  [refund_handler],
+    ComplaintTypeContract:     [refund_handler],
+    CustomerProfileContract:   [resolution_handler],
+    RefundEligibilityContract: [resolution_handler],
+    ResolutionOptionContract:  [composer_handler],
+}
+
+# publish() does exactly this:
+async def publish(self, contract: BaseModel) -> None:
+    handlers = self._subscribers.get(type(contract), [])
+    if handlers:
+        await asyncio.gather(*[h(contract) for h in handlers])
+```
+
+- When `publish(CustomerMessageContract)` is called 
+  - the bus looks up `CustomerMessageContract`        
+    - finds 4 handlers, and calls `asyncio.gather()` on all 4. 
+- When `publish(PurchaseVerifiedContract)` is called 
+  - the bus looks up `PurchaseVerifiedContract` 
+    - finds 1 handler, and calls it.
+
+### 3.2 What asyncio.gather() actually does
 
 ```python
 await asyncio.gather(coro_a(), coro_b(), coro_c())
 ```
 
-Python schedules all three **coroutines** on the event loop. 
-- It starts `coro_a` and runs it until it hits an `await`. At that `await` point, Python suspends `coro_a` and starts `coro_b`. 
-- It runs `coro_b` until its first `await`, then suspends it and starts `coro_c`. 
-- When any awaited operation completes (e.g. a network response arrives), Python resumes the corresponding
-coroutine from where it left off.
+Python schedules all three coroutines on the event loop.
+- It starts `coro_a` and runs it until it hits an `await`. At that point Python suspends `coro_a` and starts `coro_b`.
+- It runs `coro_b` until its first `await`, then suspends it and starts `coro_c`.
+- When any awaited operation completes (e.g. a network response arrives), Python resumes the
+  corresponding coroutine from where it left off.
 
 The key implication: **coroutines interleave at `await` points, not at arbitrary lines**.
-Between two `await` statements, a coroutine runs uninterrupted. No other coroutine can
-intervene in that window. 
->[!NOTE]
->This is why Python asyncio is safe from true data races on pure Python objects
+Between two `await` statements, a coroutine runs uninterrupted.
 
->[!WARNING]
->but it is not safe from **logical races** where two coroutines both pass a
->gate check before either has had a chance to post its result.
+### 3.3 The correct execution order
 
-### 3.2 Phase 1 — Concurrent fan-out
+There is no rule that says "all Phase 1 agents complete before any Phase 2 agent is called."
+**Phase 2 agents are called immediately as each Phase 1 agent finishes and publishes its result.**
 
-When `bus.publish(CustomerMessageEvent)` is called, the `EventBus` does this:
+What controls whether a Phase 2 agent does real work is its internal gate condition:
 
 ```python
-await asyncio.gather(
-    purchase_agent_handler(event),       # wraps purchase_agent.handle(event, deps)
-    history_agent_handler(event),        # wraps history_agent.handle(event, deps)
-    classification_agent_handler(event), # wraps classification_agent.handle(event, deps)
-    sentiment_agent_handler(event),      # wraps sentiment_agent.handle(event, deps)
-)
+if deps.board.purchase is None or deps.board.complaint_type is None:
+    return  # called but does nothing
 ```
 
-All four handlers start. Each immediately calls its pydantic-ai `agent.run()` which internally
-makes an async HTTP call to the LLM API. The moment each handler hits `await agent.run(...)`,
-it suspends and yields control back to the event loop. The event loop then runs the next handler
-until it too hits an `await`. All four LLM HTTP requests are in-flight simultaneously.
+So the correct statement is:
 
-Visually:
+- Phase 2 agents **get called** as soon as any Phase 1 agent that they subscribed to finishes
+- Phase 2 agents **do real work** only when all their required findings are present
+- The gate condition is the only thing enforcing this — not the bus, not asyncio
 
-```
-time →
+### 3.4 Step by step execution
 
-purchase_agent:       [──────── LLM call ──────────────]→ post finding → publish
-history_agent:        [──────── LLM call ────────]→ post finding → publish
-classification_agent: [──── LLM call ──]→ post finding → publish
-sentiment_agent:      [──────── LLM call ──────]→ post finding → publish
+**Step 1 — the subscribe loop builds the dictionary**
 
-                      ^ all start here (asyncio.gather)
-```
-
-Each agent finishes in whatever order the LLM API responds. The `asyncio.gather()` call in
-`bus.publish()` does not return until **all four** have completed.
-
-**Implication for deps.findings**: Phase 1 agents write to `deps.findings` between their
-`await agent.run()` returning and their `await bus.publish(finding)` call. Since Python does
-not context-switch between non-`await` lines, each write to `deps.findings` is atomic with
-respect to the other coroutines. There is no race condition on writing findings fields in
-Phase 1 because each agent writes a different field.
-
-### 3.3 Phase 2 — The cascade inside asyncio.gather
-
-This is where the execution model becomes non-obvious. 
-- When a Phase 1 agent posts its finding
-and calls `await bus.publish(finding_event)`, that publish call is **nested inside** the outer
-`asyncio.gather()`. 
-- The Phase 2 handler runs synchronously from the Phase 1 agent's perspective
-before the Phase 1 agent's `handle()` returns.
-
-Concretely, when `classification_agent` finishes and calls
-`await bus.publish(ComplaintTypeEvent)`, the event loop runs
-`refund_agent.handle(ComplaintTypeEvent, deps)` immediately, inside the gather. If
-`deps.findings.purchase` is already set (because `purchase_agent` finished first), the gate
-passes and `refund_agent` runs its check, posts `RefundEligibilityEvent`, and calls
-`await bus.publish(RefundEligibilityEvent)` — which in turn runs `resolution_agent.handle()` —
-which may or may not pass its gate — all before `classification_agent.handle()` returns to the
-outer gather.
-
-The full nested execution tree when `classification_agent` is the last Phase 1 agent to finish:
-
-```
-asyncio.gather() — Phase 1
-  │
-  ├── purchase_agent.handle()
-  │     await agent.run() ...
-  │     deps.findings.purchase = PurchaseVerifiedEvent
-  │     await bus.publish(PurchaseVerifiedEvent)
-  │           └── refund_agent.handle()
-  │                 gate: purchase ✓  complaint ✗  → return silently
-  │     ← returns to gather
-  │
-  ├── history_agent.handle()
-  │     await agent.run() ...
-  │     deps.findings.profile = CustomerProfileEvent
-  │     await bus.publish(CustomerProfileEvent)
-  │           └── resolution_agent.handle()
-  │                 gate: refund_eligibility ✗  → return silently
-  │     ← returns to gather
-  │
-  ├── sentiment_agent.handle()
-  │     await agent.run() ...
-  │     deps.findings.profile.sentiment_score = score   (in-place update)
-  │     ← returns to gather (no publish needed)
-  │
-  └── classification_agent.handle()   ← finishes last in this scenario
-        await agent.run() ...
-        deps.findings.complaint_type = ComplaintTypeEvent
-        await bus.publish(ComplaintTypeEvent)
-              └── refund_agent.handle()
-                    gate: purchase ✓  complaint ✓  → FIRES
-                    _check() → RefundEligibilityEvent
-                    deps.findings.refund_eligibility = RefundEligibilityEvent
-                    await bus.publish(RefundEligibilityEvent)
-                          └── resolution_agent.handle()
-                                gate: refund ✓  profile ✓  complaint ✓  → FIRES
-                                await agent.run() ...
-                                deps.findings.resolution = ResolutionOptionsEvent
-                                await bus.publish(ResolutionOptionsEvent)
-                                      └── composer_agent.handle()
-                                            await agent.run() ...
-                                            deps.findings.response = CustomerResponseEvent
-                                            ← returns
-                                ← returns
-                          ← returns
-                    ← returns
-              ← returns
-        ← returns
-  ← gather returns
-
-await bus.publish(message) returns.
-deps.findings.response is set.
+```python
+for agent in [
+    purchase_agent,
+    history_agent,
+    classification_agent,
+    sentiment_agent,
+    refund_agent,
+    resolution_agent,
+    composer_agent,
+]:
+    agent.subscribe(bus, deps)
 ```
 
-**Key insight**: `await bus.publish(message)` in `main.py` does not return until the entire
-cascade — including all Phase 2 agents — has completed. The cascade resolves depth-first,
-driven by whichever Phase 1 agent finishes last.
+Each agent's `subscribe()` method calls `hub.subscribe(ContractType, handler)` which appends
+the handler to the dictionary list for that contract type. Nothing runs. The dictionary is just built.
 
-### 3.4 The race condition — and why locks are mandatory
+**Step 2 — the single trigger in main.py**
+
+```python
+await hub.publish(message)  # message is CustomerMessageContract
+```
+
+Inside `bus.publish()`:
+
+```python
+handlers = self._subscribers.get(type(contract), [])
+# handlers = [purchase_handler, history_handler, classification_handler, sentiment_handler]
+await asyncio.gather(*[h(contract) for h in handlers])
+```
+
+All 4 handlers start. Each one immediately hits `await self._agent.run(...)` inside its
+`handle()` method and suspends. All 4 LLM calls are now in flight simultaneously.
+
+**Step 3 — say classification_agent LLM responds first**
+
+Its `handle()` resumes from `await self._agent.run(...)`:
+
+```python
+async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
+    result = await self._agent.run(...)           # resumes here
+    finding: ComplaintTypeContract = result.output
+    deps.board.complaint_type = finding        # stores finding
+    await deps.bus.publish(finding)               # publishes ComplaintTypeContract
+```
+
+`bus.publish(finding)` looks up `ComplaintTypeContract`. Finds `[refund_handler]`. Calls
+`refund_agent.handle()` immediately — right now, while the other 3 Phase 1 agents are
+still waiting for their LLM responses:
+
+```python
+async def handle(self, contract, deps: Deps) -> None:
+    async with self._lock:
+        if self._fired:
+            return
+        if deps.board.purchase is None or deps.board.complaint_type is None:
+            return  # purchase is None — exits silently
+```
+
+`deps.board.purchase` is `None` because `purchase_agent` has not finished yet. Gate fails.
+`refund_agent` exits silently. Control returns to `classification_agent.handle()` which is now done.
+
+**Step 4 — say purchase_agent LLM responds next**
+
+Its `handle()` resumes:
+
+```python
+async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
+    result = await self._agent.run(...)        # resumes here
+    finding: PurchaseVerifiedContract = result.output
+    deps.board.purchase = finding           # stores finding
+    await deps.bus.publish(finding)            # publishes PurchaseVerifiedContract
+```
+
+`bus.publish(finding)` looks up `PurchaseVerifiedContract`. Finds `[refund_handler]`. Calls
+`refund_agent.handle()` again — immediately:
+
+```python
+async def handle(self, contract, deps: Deps) -> None:
+    async with self._lock:
+        if self._fired:
+            return
+        if deps.board.purchase is None or deps.board.complaint_type is None:
+            return
+        # purchase is set (just now) and complaint_type is set (from Step 3)
+        # gate passes
+        self._fired = True  # set inside lock so it never fires twice
+```
+
+Gate passes. Continues outside the lock:
+
+```python
+    finding = self._check(
+        deps.board.purchase,
+        deps.board.complaint_type,
+        deps.policy,
+    )
+    deps.board.refund_eligibility = finding
+    await deps.bus.publish(finding)            # publishes RefundEligibilityContract
+```
+
+`bus.publish(finding)` looks up `RefundEligibilityContract`. Finds `[resolution_handler]`. Calls
+`resolution_agent.handle()` immediately — while `history_agent` and `sentiment_agent` are
+still waiting for their LLM responses:
+
+```python
+async def handle(self, contract, deps: Deps) -> None:
+    async with self._lock:
+        if self._fired:
+            return
+        if (deps.board.refund_eligibility is None
+                or deps.board.profile is None
+                or deps.board.complaint_type is None):
+            return  # profile is None — history_agent not done yet — exits silently
+```
+
+Gate fails. `resolution_agent` exits silently. Control unwinds back through `refund_agent.handle()`,
+back through `purchase_agent.handle()` which is now done. Back to the original `asyncio.gather()`.
+Still waiting for `history_agent` and `sentiment_agent`.
+
+**Step 5 — history_agent LLM responds**
+
+Its `handle()` resumes:
+
+```python
+async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
+    result = await self._agent.run(...)        # resumes here
+    finding: CustomerProfileContract = result.output
+    deps.board.profile = finding            # stores finding
+    await deps.bus.publish(finding)            # publishes CustomerProfileContract
+```
+
+`bus.publish(finding)` looks up `CustomerProfileContract`. Finds `[resolution_handler]`. Calls
+`resolution_agent.handle()`:
+
+```python
+async def handle(self, contract, deps: Deps) -> None:
+    async with self._lock:
+        if self._fired:
+            return
+        if (deps.board.refund_eligibility is None
+                or deps.board.profile is None
+                or deps.board.complaint_type is None):
+            return
+        # all three are now set — gate passes
+        self._fired = True
+```
+
+Gate passes. Continues:
+
+```python
+    result = await self._agent.run(...)
+    finding: ResolutionOptionsContract = result.output
+    deps.board.resolution = finding
+    await deps.bus.publish(finding)            # publishes ResolutionOptionsContract
+```
+
+`bus.publish(finding)` looks up `ResolutionOptionsContract`. Finds `[composer_handler]`. Calls
+`composer_agent.handle()`:
+
+```python
+async def handle(self, contract: ResolutionOptionsContract, deps: Deps) -> None:
+    async with self._lock:
+        if self._fired:
+            return
+        self._fired = True
+
+    result = await self._agent.run(...)
+    finding: CustomerResponseContract = result.output
+    deps.board.response = finding
+    await deps.bus.publish(finding)            # publishes CustomerResponseContract
+```
+
+`bus.publish(finding)` looks up `CustomerResponseContract`. Nobody subscribed. `handlers` is `[]`.
+Does nothing. `composer_agent.handle()` is done.
+
+Control unwinds: back through `resolution_agent.handle()`, back through `history_agent.handle()`
+which is now done. `sentiment_agent` finishes around this time too. The original `asyncio.gather()`
+has all 4 coroutines done. Returns. `await bus.publish(message)` in `main.py` returns.
+`deps.board.response` is set.
+
+**Step 6 — main.py reads the result**
+
+```python
+await bus.publish(message)
+# returns here — entire cascade is complete
+
+response = deps.board.response
+return {
+    "resolved":      response.resolved,
+    "response":      response.response,
+    "actions_taken": response.actions_taken,
+    "total_tokens":  deps.total_tokens,
+}
+```
+
+### 3.5 The race condition — and why locks are mandatory
 
 Consider this scenario: `purchase_agent` and `classification_agent` finish at almost the same
-time. Both call `await bus.publish(their_finding_event)` in rapid succession. Because these
-`await` calls are inside the outer `asyncio.gather()`, the event loop can interleave them:
+time. Both call `await deps.bus.publish(their_finding)` in rapid succession. The event loop
+can interleave them:
 
 ```
-classification_agent:  deps.findings.complaint_type = ComplaintTypeEvent
-                       await bus.publish(ComplaintTypeEvent)
+classification_agent:  deps.board.complaint_type = ComplaintTypeContract
+                       await bus.publish(ComplaintTypeContract)
                              └── refund_agent.handle()
                                    gate check: purchase ✓  complaint ✓  → PASSES
-                                   ← hasn't posted yet, still in _check()
+                                   ← still inside _check(), hasn't set _fired yet
 
-purchase_agent:        (already finished, but its bus.publish triggered refund_agent earlier)
-                       await bus.publish(PurchaseVerifiedEvent)
+purchase_agent:        await bus.publish(PurchaseVerifiedContract)
                              └── refund_agent.handle()
                                    gate check: purchase ✓  complaint ✓  → PASSES AGAIN
 ```
 
-Both invocations of `refund_agent.handle()` pass the gate. `_check()` runs twice.
-`RefundEligibilityEvent` is published twice. `ResolutionAgent` fires twice.
-`CustomerResponseEvent` is posted twice — second write overwrites first.
+Both invocations pass the gate. `_check()` runs twice. `RefundEligibilityContract` is published
+twice. `ResolutionContract` fires twice. `CustomerResponseContract` is written twice.
 
-This is a **logical race condition**. It cannot happen with true threading because asyncio is
-single-threaded, but it can happen because the gate check and the fired flag update are not
-atomic across `await` points.
-
-**The fix: asyncio.Lock with a fired flag on every Phase 2 agent.**
-
-The lock ensures only one invocation of `handle()` can be inside the critical section at a
-time. The `_fired` flag ensures subsequent invocations exit immediately even after the lock
-is released.
+**The fix: asyncio.Lock with a _fired flag on every agent that must fire only once.**
 
 ```python
-class RefundEligibilityAgent(BaseAgent):
-    def __init__(self, name: str):
-        super().__init__(name, agent=None)
-        self._lock = asyncio.Lock()
-        self._fired = False
+async def handle(self, contract, deps: Deps) -> None:
+    async with self._lock:
+        if self._fired:
+            return
+        if deps.board.purchase is None or deps.board.complaint_type is None:
+            return
+        self._fired = True      # set inside lock before releasing
 
-    async def handle(self, event, deps: Deps) -> None:
-        async with self._lock:
-            if self._fired:
-                return
-            if deps.findings.purchase is None or deps.findings.complaint_type is None:
-                return
-            self._fired = True          # set before releasing lock
-
-        # outside the lock — only one invocation ever reaches here
-        finding = self._check(
-            deps.findings.purchase,
-            deps.findings.complaint_type,
-            deps.policy,
-        )
-        deps.findings.refund_eligibility = finding
-        await deps.bus.publish(finding)
+    # only one invocation ever reaches here
+    finding = self._check(...)
+    deps.board.refund_eligibility = finding
+    await deps.bus.publish(finding)
 ```
 
-The same lock-and-fired pattern applies to `ResolutionAgent` and `ResponseComposerAgent`.
-Every Phase 2 agent must have it. Without it the system produces correct output most of the
-time but fails non-deterministically under load.
+The lock ensures only one invocation can be inside the critical section at a time. The `_fired`
+flag ensures subsequent invocations exit immediately even after the lock is released.
 
-### 3.5 Phase 2 execution summary
+### 3.6 Gate conditions per agent
 
-| Agent | Gate condition | Fires when | Lock needed |
-|---|---|---|---|
-| `RefundEligibilityAgent` | purchase + complaint_type set | Last of the two arrives | Yes |
-| `ResolutionAgent` | refund_eligibility + profile + complaint_type set | Last of the three arrives | Yes |
-| `ResponseComposerAgent` | ResolutionOptionsEvent received | Immediately on event | Yes (defensive) |
+| Agent | Gate condition | Lock needed |
+|---|---|---|
+| `RefundEligibilityAgent` | `purchase` + `complaint_type` both set | Yes |
+| `ResolutionAgent` | `refund_eligibility` + `profile` + `complaint_type` all set | Yes |
+| `ResponseComposerAgent` | receives `ResolutionOptionsContract` | Yes (defensive) |
 
-`ResponseComposerAgent` technically only receives one event (`ResolutionOptionsEvent`) and
-`ResolutionAgent` fires it exactly once due to its own lock. But the defensive lock is cheap
-and makes the invariant explicit.
-
-### 3.6 Complete execution timeline
-
-```
-main.py calls await bus.publish(CustomerMessageEvent)
-│
-├─ asyncio.gather fires all Phase 1 handlers concurrently
-│   ├─ All four LLM HTTP requests go out simultaneously
-│   ├─ Each awaits its LLM response independently
-│   └─ Each posts its finding and publishes its event when done
-│
-├─ Phase 2 gate checks fire inside Phase 1 publish calls
-│   ├─ Early arrivals → gate fails → silent return
-│   └─ Final arrival → gate passes → Phase 2 fires
-│
-├─ RefundEligibilityAgent fires (pure Python, no LLM)
-│   └─ Publishes RefundEligibilityEvent
-│         └─ ResolutionAgent gate check
-│               └─ If profile already posted → ResolutionAgent fires (LLM)
-│                     └─ Publishes ResolutionOptionsEvent
-│                           └─ ResponseComposerAgent fires (LLM)
-│                                 └─ Posts CustomerResponseEvent
-│
-└─ await bus.publish() returns
-   deps.findings.response is set
-   main.py reads result and returns
-```
+`ResponseComposerAgent` technically only receives one contract and `ResolutionAgent` fires it
+exactly once due to its own lock. But the defensive lock is cheap and makes the invariant explicit.
 
 ---
 
@@ -318,31 +388,34 @@ customer_service/
 │   ├── refund_eligibility_agent.py
 │   ├── resolution_agent.py
 │   └── response_composer_agent.py
-├── bus/
-│   └── event_bus.py
 ├── core/
 │   ├── deps.py
 │   ├── findings.py
 │   ├── logger.py
-│   └── llm_factory.py
+│   ├── llm_factory.py
+│   └── message_hub.py
 ├── db/
-│   ├── connection.py          ← Database singleton
-│   ├── schema.sql
+│   ├── connection.py
 │   └── repositories/
-│       ├── facade.py          ← RepoFacade
+│       ├── facade.py
 │       ├── customer_repo.py
 │       ├── order_repo.py
 │       ├── complaint_repo.py
 │       └── policy_repo.py
 ├── schemas/
-│   ├── data/
-│   │   ├── customer.py
-│   │   ├── order.py
-│   │   ├── complaint.py
-│   │   └── policy.py
-│   └── events/
-│       ├── inbound.py
-│       └── findings.py
+│   ├── customer.py
+│   ├── order.py
+│   ├── complaint.py
+│   ├── policy.py
+│   └── contracts/
+│       ├── facade_contracts.py
+│       ├── customer_message.py
+│       ├── customer_message.py
+│       ├── customer_profile.py
+│       ├── customer_response.py
+│       ├── purchase_verified.py
+│       ├── refund_eligibility.py
+│       └── resolution_option.py
 ├── tools/
 │   ├── agent_logger.py
 │   ├── customer_tools.py
@@ -395,7 +468,6 @@ Single-row configuration table (id = 1)
 - complaint_escalation_threshold — int
 - replacement_eligible_categories — JSON
 - auto_refund_complaint_types — JSON
-
 
 ### 5.2 Database Singleton
 
@@ -606,7 +678,7 @@ class PolicyRepository:
 
 ### 5.4 RepoFacade
 
-**Location**: `db/repositories/facade.py`
+`db/repositories/facade.py`
 
 Groups all repositories into one injection point for `Deps`. Tools call
 `ctx.deps.repo.order.get_order(...)` — consistent, clean, no field proliferation on `Deps`.
@@ -638,7 +710,7 @@ class RepoFacade:
 
 ### 6.1 Data Schemas
 
-**`schemas/data/customer.py`**
+**`schemas/customer.py`**
 
 ```python
 from pydantic import BaseModel
@@ -651,7 +723,7 @@ class Customer(BaseModel):
     joined_date: str
 ```
 
-**`schemas/data/order.py`**
+**`schemas/order.py`**
 
 ```python
 from pydantic import BaseModel
@@ -673,7 +745,7 @@ class SalesOrder(BaseModel):
     days_since_purchase: int
 ```
 
-**`schemas/data/policy.py`**
+**`schemas/policy.py`**
 
 ```python
 from pydantic import BaseModel
@@ -687,14 +759,11 @@ class Policy(BaseModel):
     auto_refund_complaint_types: list[str]
 ```
 
-### 6.2 Event Schemas
+### 6.2 Contract Schemas
 
-**`schemas/events/inbound.py`**
-
+**`schemas/contracts/customer_message.py`**
 ```python
-from pydantic import BaseModel
-
-class CustomerMessageEvent(BaseModel):
+class CustomerMessageContract(BaseModel):
     message_id: str    # uuid — ties all findings for this request together
     customer_id: str
     order_id: str
@@ -702,12 +771,9 @@ class CustomerMessageEvent(BaseModel):
     timestamp: str
 ```
 
-**`schemas/events/findings.py`**
-
+**`schemas/contracts/purchases_verified.py`**
 ```python
-from pydantic import BaseModel
-
-class PurchaseVerifiedEvent(BaseModel):
+class PurchaseVerifiedContract(BaseModel):
     message_id: str
     verified: bool
     order_date: str | None = None
@@ -716,8 +782,11 @@ class PurchaseVerifiedEvent(BaseModel):
     days_since_purchase: int | None = None
     order_total: float | None = None
     reason: str | None = None
+```
 
-class CustomerProfileEvent(BaseModel):
+**`schemas/contracts/customer_profile.py`**
+```python
+class CustomerProfileContract(BaseModel):
     message_id: str
     customer_id: str
     tier: str
@@ -726,8 +795,11 @@ class CustomerProfileEvent(BaseModel):
     is_repeat_issue: bool
     sentiment_score: float = 0.0
     sentiment_label: str = "neutral"
+```
 
-class ComplaintTypeEvent(BaseModel):
+**`schemas/contracts/complaint_type.py`**
+```python
+class ComplaintTypeContract(BaseModel):
     message_id: str
     complaint_type: str        # "packaging"|"product"|"delivery"|"billing"
     severity: str              # "low"|"medium"|"high"
@@ -735,22 +807,31 @@ class ComplaintTypeEvent(BaseModel):
     wants_refund: bool
     wants_replacement: bool
     wants_complaint_filed: bool
+```
 
-class RefundEligibilityEvent(BaseModel):
+**`schemas/contracts/refund_eligibility.py`**
+```python
+class RefundEligibilityContract(BaseModel):
     message_id: str
     eligible: bool
     reason: str
     refund_amount: float | None = None
     extended_due_to_tier: bool = False
+```
 
-class ResolutionOptionsEvent(BaseModel):
+**`schemas/contracts/resolution_option.py`**
+```python
+class ResolutionOptionsContract(BaseModel):
     message_id: str
     options: list[str]
     recommended: str
     escalate_to_human: bool = False
     escalation_reason: str | None = None
+```
 
-class CustomerResponseEvent(BaseModel):
+**`schemas/contracts/customer_response.py`**
+```python
+class CustomerResponseContract(BaseModel):
     message_id: str
     response: str
     actions_taken: list[str]
@@ -761,31 +842,31 @@ class CustomerResponseEvent(BaseModel):
 
 ## 7. Core Infrastructure
 
-### 7.1 Findings
+### 7.1 Blackboard
 
-**Location**: `core/findings.py`
+**Location**: `core/blackboard.py`
 
 ```python
 from dataclasses import dataclass
-from schemas.events.findings import (
-    PurchaseVerifiedEvent, CustomerProfileEvent, ComplaintTypeEvent,
-    RefundEligibilityEvent, ResolutionOptionsEvent, CustomerResponseEvent,
+from schemas.contracts import (
+    PurchaseVerifiedContract, CustomerProfileContract, ComplaintTypeContract,
+    RefundEligibilityContract, ResolutionOptionsContract, CustomerResponseContract,
 )
 
 @dataclass
-class Findings:
+class Blackboard:
     """Result accumulator for one request lifecycle.
 
-    Phase 1 agents write here after their LLM call completes.
-    Phase 2 agents read here to check gate conditions.
-    One instance per CustomerMessageEvent. Discarded when complete.
+    Agents write here after their LLM call completes.
+    Downstream agents read here to check gate conditions.
+    One instance per CustomerMessageContract. Discarded when complete.
     """
-    purchase:           PurchaseVerifiedEvent  | None = None
-    profile:            CustomerProfileEvent   | None = None
-    complaint_type:     ComplaintTypeEvent     | None = None
-    refund_eligibility: RefundEligibilityEvent | None = None
-    resolution:         ResolutionOptionsEvent | None = None
-    response:           CustomerResponseEvent  | None = None
+    purchase:           PurchaseVerifiedContract  | None = None
+    profile:            CustomerProfileContract   | None = None
+    complaint_type:     ComplaintTypeContract     | None = None
+    refund_eligibility: RefundEligibilityContract | None = None
+    resolution:         ResolutionOptionsContract | None = None
+    response:           CustomerResponseContract  | None = None
 
     def is_complete(self) -> bool:
         return self.response is not None
@@ -797,8 +878,8 @@ class Findings:
 
 ```python
 from dataclasses import dataclass
-from bus.event_bus import EventBus
-from core.findings import Findings
+from core.message_hub import MessageHub
+from core.board import Blackboard
 from db.repositories.facade import RepoFacade
 from schemas.data.policy import Policy
 
@@ -807,7 +888,7 @@ class Deps:
     """Injected into every agent run via RunContext.
 
     repo         — facade grouping all repositories. Tools call ctx.deps.repo.<repo>.<method>().
-    bus          — event bus. Agents publish findings through it.
+    hub          — message hub. Agents publish findings through it.
     findings     — accumulates agent output events for this request.
     policy       — single policy config, loaded once at startup.
     message_id,
@@ -816,8 +897,8 @@ class Deps:
     total_tokens — accumulated LLM token usage across all agents for this request.
     """
     repo:         RepoFacade
-    bus:          EventBus
-    findings:     Findings
+    hub:          MessageHub
+    board:        Blalckboard
     policy:       Policy
     message_id:   str
     customer_id:  str
@@ -825,16 +906,16 @@ class Deps:
     total_tokens: int = 0
 ```
 
-### 7.3 EventBus
+### 7.3 MessageHub
 
-**Location**: `bus/event_bus.py`
+**Location**: `core/message_hub.py`
 
-The `EventBus` has one job: fan out. It knows nothing about domains, agents, or findings.
-Handlers are registered at startup via `subscribe()`. Each `publish()` call fans the event out
-to all registered handlers for that event type via `asyncio.gather()`.
+The `MessageHub` has one job: fan out. It is a dictionary mapping contract types to lists of handler
+functions. `subscribe()` appends to the list. `publish()` looks up the list and calls
+`asyncio.gather()` on all handlers for that contract type.
 
 Handlers are registered as **closures that capture `deps`** at subscription time. This keeps
-the bus signature clean — `publish(event)` only, no `deps` parameter leaking into the bus.
+the bus signature clean — `publish(contract)` only, no `deps` parameter leaking into the bus.
 
 ```python
 import asyncio
@@ -843,52 +924,45 @@ from typing import Callable
 from pydantic import BaseModel
 
 
-class EventBus:
-    """Pure Observer fan-out. Zero domain knowledge.
+class MessageHub:
+    """Pure fan-out message hub. Zero domain knowledge.
 
-    subscribe(event_type, handler):
-        Register an async handler for an event type.
-        Handler signature: async def handler(event: BaseModel) -> None
-        Called once per agent per event type at startup.
+    subscribe(contract_type, handler):
+        Appends handler to the list for that contract type.
+        Handler signature: async def handler(contract: BaseModel) -> None
+        Called once per agent per contract type at startup.
 
-    publish(event):
-        Fan out to all registered handlers for type(event) via asyncio.gather().
-        Does not return until all handlers (and their downstream publishes) complete.
-        Handlers for other event types are never called.
+    publish(contract):
+        Looks up type(contract) in the dictionary.
+        Calls asyncio.gather() on all handlers in that list.
+        Does not return until all handlers and their downstream publishes complete.
+        Handlers for other contract types are never called.
     """
 
     def __init__(self):
         self._subscribers: dict[type, list[Callable]] = defaultdict(list)
 
-    def subscribe(self, event_type: type, handler: Callable) -> None:
-        self._subscribers[event_type].append(handler)
+    def subscribe(self, contract_type: type, handler: Callable) -> None:
+        self._subscribers[contract_type].append(handler)
 
-    async def publish(self, event: BaseModel) -> None:
-        handlers = self._subscribers.get(type(event), [])
+    async def publish(self, contract: BaseModel) -> None:
+        handlers = self._subscribers.get(type(contract), [])
         if handlers:
-            await asyncio.gather(*[h(event) for h in handlers])
+            await asyncio.gather(*[h(contract) for h in handlers])
 ```
 
 **How handlers capture deps via closure in each agent's `subscribe()`:**
 
 ```python
 # inside any agent's subscribe() method
-def subscribe(self, bus: EventBus, deps: Deps) -> None:
-    async def handler(event):
-        await self.handle(event, deps)   # deps captured here at subscription time
-    bus.subscribe(CustomerMessageEvent, handler)
+def subscribe(self, bus: MessageHub, deps: Deps) -> None:
+    async def handler(contract):
+        await self.handle(contract, deps)   # deps captured here at subscription time
+    bus.subscribe(CustomerMessageContract, handler)
 ```
 
-The bus calls `handler(event)`. The handler calls `self.handle(event, deps)` with the captured
+The bus calls `handler(contract)`. The handler calls `self.handle(contract, deps)` with the captured
 `deps`. The bus never receives or knows about `deps`.
-
-**What the EventBus does not do:**
-
-- Does not filter events by content
-- Does not decide which handlers are relevant
-- Does not retry failed handlers
-- Does not catch or suppress handler exceptions
-- Does not know what a customer, order, or finding is
 
 ---
 
@@ -1023,12 +1097,12 @@ async def get_complaint_count(ctx: RunContext[Deps]) -> str:
 ### 9.1 Design principles
 
 Each agent has one domain responsibility, one subscription set, and one tool set. The LLM calls
-tools mid-reasoning to pull exactly the data it needs — never pre-loaded. Each agent posts its
-finding to `deps.findings` and publishes it to the bus. No agent knows or cares what other
+tools mid-reasoning to pull exactly the data it needs — never pre-loaded. Each agent stores its
+finding in `deps.board` and publishes it to the bus. No agent knows or cares what other
 agents exist.
 
-All Phase 2 agents carry an `asyncio.Lock` and a `_fired` flag. See Section 3.4 for the full
-explanation of why this is mandatory.
+All agents that must fire only once carry an `asyncio.Lock` and a `_fired` flag. See Section
+3.5 for the full explanation of why this is mandatory.
 
 ### 9.2 BaseAgent
 
@@ -1037,7 +1111,7 @@ explanation of why this is mandatory.
 ```python
 from abc import ABC, abstractmethod
 from pydantic_ai import Agent
-from bus.event_bus import EventBus
+from core.message_hub import MessageHub
 from core.deps import Deps
 
 
@@ -1051,31 +1125,28 @@ class BaseAgent(ABC):
         return self._name
 
     @abstractmethod
-    def subscribe(self, bus: EventBus, deps: Deps) -> None: ...
+    def subscribe(self, bus: MessageHub, deps: Deps) -> None: ...
 
     @abstractmethod
     def get_instruction(self) -> str: ...
 ```
 
----
-
 ### 9.3 PurchaseVerificationAgent
 
-- **Subscribes to**: `CustomerMessageEvent`
+- **Subscribes to**: `CustomerMessageContract`
 - **Responsibility**: Verify the order exists, belongs to this customer, is delivered, and
   determine days since purchase and what was purchased.
-- **Output**: `PurchaseVerifiedEvent` → `deps.findings.purchase`
+- **Output**: `PurchaseVerifiedContract` → `deps.board.purchase`
 - **Tools**: `get_order_summary`, `get_order_line_items`, `get_order_total`, `log_decision`
-- **Lock**: Not needed — Phase 1 agent, writes a unique findings field.
+- **Lock**: Not needed — writes a unique findings field, never fires twice for the same field.
 
 ```python
 class PurchaseVerificationAgent(BaseAgent):
 
-    def subscribe(self, bus: EventBus, deps: Deps) -> None:
-        async def handler(event):
-            await self.handle(event, deps)
-            
-        bus.subscribe(CustomerMessageEvent, handler)
+    def subscribe(self, bus: MessageHub, deps: Deps) -> None:
+        async def handler(contract):
+            await self.handle(contract, deps)
+        bus.subscribe(CustomerMessageContract, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1096,41 +1167,39 @@ class PurchaseVerificationAgent(BaseAgent):
             Set verified=False with a clear reason if order not found,
             not belonging to this customer, or not "delivered".
 
-            Call log_decision once. Return a PurchaseVerifiedEvent.
+            Call log_decision once. Return a PurchaseVerifiedContract.
         """
 
-    async def handle(self, event: CustomerMessageEvent, deps: Deps) -> None:
+    async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
         result = await self._agent.run(
             f"Verify purchase for order {deps.order_id} "
             f"by customer {deps.customer_id}. "
-            f"Customer message: {event.message}",
+            f"Customer message: {contract.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: PurchaseVerifiedEvent = result.output
-        deps.findings.purchase = finding
+        finding: PurchaseVerifiedContract = result.output
+        deps.board.purchase = finding
         await deps.bus.publish(finding)
 ```
 
----
-
 ### 9.4 CustomerHistoryAgent
 
-- **Subscribes to**: `CustomerMessageEvent`
+- **Subscribes to**: `CustomerMessageContract`
 - **Responsibility**: Build customer profile — tier, order count, complaint count, repeat issue
   detection. Initialises sentiment to 0.0 for `SentimentAgent` to update.
-- **Output**: `CustomerProfileEvent` → `deps.findings.profile`
+- **Output**: `CustomerProfileContract` → `deps.board.profile`
 - **Tools**: `get_customer_profile`, `get_customer_order_count`, `get_recent_complaints`,
   `get_complaint_count`, `log_decision`
-- **Lock**: Not needed — Phase 1, unique findings field.
+- **Lock**: Not needed — writes a unique findings field.
 
 ```python
 class CustomerHistoryAgent(BaseAgent):
 
-    def subscribe(self, bus: EventBus, deps: Deps) -> None:
-        async def handler(event):
-            await self.handle(event, deps)
-        bus.subscribe(CustomerMessageEvent, handler)
+    def subscribe(self, bus: MessageHub, deps: Deps) -> None:
+        async def handler(contract):
+            await self.handle(contract, deps)
+        bus.subscribe(CustomerMessageContract, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1153,39 +1222,37 @@ class CustomerHistoryAgent(BaseAgent):
             Initialise sentiment_score=0.0, sentiment_label="neutral".
             SentimentAgent will update these fields independently.
 
-            Call log_decision once. Return a CustomerProfileEvent.
+            Call log_decision once. Return a CustomerProfileContract.
         """
 
-    async def handle(self, event: CustomerMessageEvent, deps: Deps) -> None:
+    async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
         result = await self._agent.run(
             f"Build profile for customer {deps.customer_id}. "
-            f"Message context: {event.message}",
+            f"Message context: {contract.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: CustomerProfileEvent = result.output
-        deps.findings.profile = finding
+        finding: CustomerProfileContract = result.output
+        deps.board.profile = finding
         await deps.bus.publish(finding)
 ```
 
----
-
 ### 9.5 ComplaintClassificationAgent
 
-- **Subscribes to**: `CustomerMessageEvent`
+- **Subscribes to**: `CustomerMessageContract`
 - **Responsibility**: Classify complaint type, severity, keywords, and explicit intent flags
   from the message text. No database queries needed.
-- **Output**: `ComplaintTypeEvent` → `deps.findings.complaint_type`
+- **Output**: `ComplaintTypeContract` → `deps.board.complaint_type`
 - **Tools**: `log_decision` only
-- **Lock**: Not needed — Phase 1, unique findings field.
+- **Lock**: Not needed — writes a unique findings field.
 
 ```python
 class ComplaintClassificationAgent(BaseAgent):
 
-    def subscribe(self, bus: EventBus, deps: Deps) -> None:
-        async def handler(event):
-            await self.handle(event, deps)
-        bus.subscribe(CustomerMessageEvent, handler)
+    def subscribe(self, bus: MessageHub, deps: Deps) -> None:
+        async def handler(contract):
+            await self.handle(contract, deps)
+        bus.subscribe(CustomerMessageContract, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1207,51 +1274,49 @@ class ComplaintClassificationAgent(BaseAgent):
               wants_replacement     customer mentions replacement or exchange
               wants_complaint_filed customer mentions complaint or report
 
-            Call log_decision once. Return a ComplaintTypeEvent.
+            Call log_decision once. Return a ComplaintTypeContract.
         """
 
-    async def handle(self, event: CustomerMessageEvent, deps: Deps) -> None:
+    async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
         result = await self._agent.run(
-            f"Classify this complaint: {event.message}",
+            f"Classify this complaint: {contract.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: ComplaintTypeEvent = result.output
-        deps.findings.complaint_type = finding
+        finding: ComplaintTypeContract = result.output
+        deps.board.complaint_type = finding
         await deps.bus.publish(finding)
 ```
 
----
-
 ### 9.6 SentimentAgent
 
-- **Subscribes to**: `CustomerMessageEvent`
+- **Subscribes to**: `CustomerMessageContract`
 - **Responsibility**: Score emotional tone independently. Updates profile sentiment fields
   in place if profile is already posted. If not yet posted, the score is held until profile
-  arrives — a second subscription on `CustomerProfileEvent` applies the update.
-- **Output**: in-place update of `deps.findings.profile.sentiment_score` and `sentiment_label`
+  arrives — a second subscription on `CustomerProfileContract` applies the update.
+- **Output**: in-place update of `deps.board.profile.sentiment_score` and `sentiment_label`
 - **Tools**: `log_decision` only
 - **Lock**: Not needed — in-place field update on an existing object, no publish.
 
 ```python
 class SentimentAgent(BaseAgent):
 
-    def subscribe(self, bus: EventBus, deps: Deps) -> None:
+    def subscribe(self, bus: MessageHub, deps: Deps) -> None:
         self._pending_score = None
         self._pending_label = None
 
-        async def on_message(event):
-            await self.handle(event, deps)
+        async def on_message(contract):
+            await self.handle(contract, deps)
 
-        async def on_profile(event):
+        async def on_profile(contract):
             # if sentiment finished before profile was posted, apply now
             if self._pending_score is not None:
-                event.sentiment_score = self._pending_score
-                event.sentiment_label = self._pending_label
-                deps.findings.profile = event
+                contract.sentiment_score = self._pending_score
+                contract.sentiment_label = self._pending_label
+                deps.board.profile = contract
 
-        bus.subscribe(CustomerMessageEvent, on_message)
-        bus.subscribe(CustomerProfileEvent, on_profile)
+        bus.subscribe(CustomerMessageContract, on_message)
+        bus.subscribe(CustomerProfileContract, on_profile)
 
     def get_instruction(self) -> str:
         return """
@@ -1274,32 +1339,30 @@ class SentimentAgent(BaseAgent):
             Return {"sentiment_score": float, "sentiment_label": str}.
         """
 
-    async def handle(self, event: CustomerMessageEvent, deps: Deps) -> None:
+    async def handle(self, contract: CustomerMessageContract, deps: Deps) -> None:
         result = await self._agent.run(
-            f"Score the sentiment of this message: {event.message}",
+            f"Score the sentiment of this message: {contract.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )
         score = result.output
-        if deps.findings.profile is not None:
-            deps.findings.profile.sentiment_score = score["sentiment_score"]
-            deps.findings.profile.sentiment_label = score["sentiment_label"]
+        if deps.board.profile is not None:
+            deps.board.profile.sentiment_score = score["sentiment_score"]
+            deps.board.profile.sentiment_label = score["sentiment_label"]
         else:
             # profile not yet posted — hold until on_profile fires
             self._pending_score = score["sentiment_score"]
             self._pending_label = score["sentiment_label"]
 ```
 
----
-
 ### 9.7 RefundEligibilityAgent
 
-- **Subscribes to**: `PurchaseVerifiedEvent` AND `ComplaintTypeEvent`
+- **Subscribes to**: `PurchaseVerifiedContract` AND `ComplaintTypeContract`
 - **Responsibility**: Pure Python eligibility check against policy. No LLM. No database.
-- **Gate condition**: both `deps.findings.purchase` and `deps.findings.complaint_type` set.
-- **Lock**: Mandatory — see Section 3.4. Both subscribed events can arrive near-simultaneously
-  and both pass the gate, causing double-firing without the lock.
-- **Output**: `RefundEligibilityEvent` → `deps.findings.refund_eligibility`
+- **Gate condition**: both `deps.board.purchase` and `deps.board.complaint_type` set.
+- **Lock**: Mandatory — both subscribed contract can arrive and call this handler before either
+  has had a chance to set `_fired`, causing it to run twice without the lock.
+- **Output**: `RefundEligibilityContract` → `deps.board.refund_eligibility`
 
 ```python
 import asyncio
@@ -1311,36 +1374,36 @@ class RefundEligibilityAgent(BaseAgent):
         self._lock   = asyncio.Lock()
         self._fired  = False
 
-    def subscribe(self, bus: EventBus, deps: Deps) -> None:
-        async def handler(event):
-            await self.handle(event, deps)
-        bus.subscribe(PurchaseVerifiedEvent, handler)
-        bus.subscribe(ComplaintTypeEvent, handler)
+    def subscribe(self, bus: MessageHub, deps: Deps) -> None:
+        async def handler(contract):
+            await self.handle(contract, deps)
+        bus.subscribe(PurchaseVerifiedContract, handler)
+        bus.subscribe(ComplaintTypeContract, handler)
 
     def get_instruction(self) -> str:
         return ""
 
-    async def handle(self, event, deps: Deps) -> None:
+    async def handle(self, contract, deps: Deps) -> None:
         async with self._lock:
             if self._fired:
                 return
-            if (deps.findings.purchase is None
-                    or deps.findings.complaint_type is None):
+            if (deps.board.purchase is None
+                    or deps.board.complaint_type is None):
                 return
             self._fired = True       # set inside lock before releasing
 
         # only one invocation ever reaches here
         finding = self._check(
-            deps.findings.purchase,
-            deps.findings.complaint_type,
+            deps.board.purchase,
+            deps.board.complaint_type,
             deps.policy,
         )
-        deps.findings.refund_eligibility = finding
+        deps.board.refund_eligibility = finding
         await deps.bus.publish(finding)
 
-    def _check(self, purchase, complaint, policy) -> RefundEligibilityEvent:
+    def _check(self, purchase, complaint, policy) -> RefundEligibilityContract:
         if not purchase.verified:
-            return RefundEligibilityEvent(
+            return RefundEligibilityContract(
                 message_id=purchase.message_id,
                 eligible=False,
                 reason="Purchase could not be verified",
@@ -1350,7 +1413,7 @@ class RefundEligibilityAgent(BaseAgent):
         days   = purchase.days_since_purchase or 0
 
         if days > window:
-            return RefundEligibilityEvent(
+            return RefundEligibilityContract(
                 message_id=purchase.message_id,
                 eligible=False,
                 reason=(
@@ -1360,7 +1423,7 @@ class RefundEligibilityAgent(BaseAgent):
             )
 
         auto = complaint.complaint_type in policy.auto_refund_complaint_types
-        return RefundEligibilityEvent(
+        return RefundEligibilityContract(
             message_id=purchase.message_id,
             eligible=True,
             reason=(
@@ -1372,15 +1435,13 @@ class RefundEligibilityAgent(BaseAgent):
         )
 ```
 
----
-
 ### 9.8 ResolutionAgent
 
-- **Subscribes to**: `RefundEligibilityEvent` AND `CustomerProfileEvent`
+- **Subscribes to**: `RefundEligibilityContract` AND `CustomerProfileContract`
 - **Gate condition**: `refund_eligibility`, `profile`, and `complaint_type` all set.
-- **Lock**: Mandatory — both subscribed events can near-simultaneously pass the gate.
-- **Output**: `ResolutionOptionsEvent` → `deps.findings.resolution`
-- **Tools**: `log_decision` only — all context from `deps.findings`
+- **Lock**: Mandatory — both subscribed contract can call this handler before either sets `_fired`.
+- **Output**: `ResolutionOptionsContract` → `deps.board.resolution`
+- **Tools**: `log_decision` only — all context from `deps.board`
 
 ```python
 class ResolutionAgent(BaseAgent):
@@ -1390,11 +1451,11 @@ class ResolutionAgent(BaseAgent):
         self._lock  = asyncio.Lock()
         self._fired = False
 
-    def subscribe(self, bus: EventBus, deps: Deps) -> None:
-        async def handler(event):
-            await self.handle(event, deps)
-        bus.subscribe(RefundEligibilityEvent, handler)
-        bus.subscribe(CustomerProfileEvent, handler)
+    def subscribe(self, bus: MessageHub, deps: Deps) -> None:
+        async def handler(contract):
+            await self.handle(contract, deps)
+        bus.subscribe(RefundEligibilityContract, handler)
+        bus.subscribe(CustomerProfileContract, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1413,26 +1474,26 @@ class ResolutionAgent(BaseAgent):
             Set recommended to the single best option given all context.
             Set escalate_to_human True if "escalation" is in options.
 
-            Call log_decision once. Return a ResolutionOptionsEvent.
+            Call log_decision once. Return a ResolutionOptionsContract.
         """
 
-    async def handle(self, event, deps: Deps) -> None:
+    async def handle(self, contract, deps: Deps) -> None:
         async with self._lock:
             if self._fired:
                 return
-            if (deps.findings.refund_eligibility is None
-                    or deps.findings.profile is None
-                    or deps.findings.complaint_type is None):
+            if (deps.board.refund_eligibility is None
+                    or deps.board.profile is None
+                    or deps.board.complaint_type is None):
                 return
             self._fired = True
 
         import json
         context = json.dumps({
-            "purchase":           deps.findings.purchase.model_dump()
-                                  if deps.findings.purchase else {},
-            "profile":            deps.findings.profile.model_dump(),
-            "complaint_type":     deps.findings.complaint_type.model_dump(),
-            "refund_eligibility": deps.findings.refund_eligibility.model_dump(),
+            "purchase":           deps.board.purchase.model_dump()
+                                  if deps.board.purchase else {},
+            "profile":            deps.board.profile.model_dump(),
+            "complaint_type":     deps.board.complaint_type.model_dump(),
+            "refund_eligibility": deps.board.refund_eligibility.model_dump(),
             "policy": {
                 "replacement_eligible_categories":
                     deps.policy.replacement_eligible_categories,
@@ -1446,21 +1507,20 @@ class ResolutionAgent(BaseAgent):
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: ResolutionOptionsEvent = result.output
-        deps.findings.resolution = finding
+        finding: ResolutionOptionsContract = result.output
+        deps.board.resolution = finding
         await deps.bus.publish(finding)
 ```
 
----
-
 ### 9.9 ResponseComposerAgent
 
-- **Subscribes to**: `ResolutionOptionsEvent`
+- **Subscribes to**: `ResolutionOptionsContract`
 - **Responsibility**: Compose the final customer-facing response. All upstream findings are
-  guaranteed present when this agent activates.
+  guaranteed present when this agent activates because `ResolutionAgent` only fires after
+  all its own gate conditions pass.
 - **Lock**: Defensive — `ResolutionAgent` fires only once due to its own lock, but the
   defensive lock here makes the invariant explicit and costs nothing.
-- **Output**: `CustomerResponseEvent` → `deps.findings.response`
+- **Output**: `CustomerResponseContract` → `deps.board.response`
 - **Tools**: `get_customer_profile`, `log_decision`
 
 ```python
@@ -1471,10 +1531,10 @@ class ResponseComposerAgent(BaseAgent):
         self._lock  = asyncio.Lock()
         self._fired = False
 
-    def subscribe(self, bus: EventBus, deps: Deps) -> None:
-        async def handler(event):
-            await self.handle(event, deps)
-        bus.subscribe(ResolutionOptionsEvent, handler)
+    def subscribe(self, bus: MessageHub, deps: Deps) -> None:
+        async def handler(contract):
+            await self.handle(contract, deps)
+        bus.subscribe(ResolutionOptionsContract, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1495,10 +1555,10 @@ class ResponseComposerAgent(BaseAgent):
             - Plain language only. No corporate jargon.
             - Under 150 words.
 
-            Call log_decision once. Return a CustomerResponseEvent.
+            Call log_decision once. Return a CustomerResponseContract.
         """
 
-    async def handle(self, event: ResolutionOptionsEvent, deps: Deps) -> None:
+    async def handle(self, contract: ResolutionOptionsContract, deps: Deps) -> None:
         async with self._lock:
             if self._fired:
                 return
@@ -1506,15 +1566,15 @@ class ResponseComposerAgent(BaseAgent):
 
         import json
         context = json.dumps({
-            "profile":            deps.findings.profile.model_dump()
-                                  if deps.findings.profile else {},
-            "complaint_type":     deps.findings.complaint_type.model_dump()
-                                  if deps.findings.complaint_type else {},
-            "purchase":           deps.findings.purchase.model_dump()
-                                  if deps.findings.purchase else {},
-            "refund_eligibility": deps.findings.refund_eligibility.model_dump()
-                                  if deps.findings.refund_eligibility else {},
-            "resolution":         event.model_dump(),
+            "profile":            deps.board.profile.model_dump()
+                                  if deps.board.profile else {},
+            "complaint_type":     deps.board.complaint_type.model_dump()
+                                  if deps.board.complaint_type else {},
+            "purchase":           deps.board.purchase.model_dump()
+                                  if deps.board.purchase else {},
+            "refund_eligibility": deps.board.refund_eligibility.model_dump()
+                                  if deps.board.refund_eligibility else {},
+            "resolution":         contract.model_dump(),
         }, indent=2)
 
         result = await self._agent.run(
@@ -1522,8 +1582,8 @@ class ResponseComposerAgent(BaseAgent):
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: CustomerResponseEvent = result.output
-        deps.findings.response = finding
+        finding: CustomerResponseContract = result.output
+        deps.board.response = finding
         await deps.bus.publish(finding)
 ```
 
@@ -1547,9 +1607,9 @@ from agents.refund_eligibility_agent import RefundEligibilityAgent
 from agents.resolution_agent import ResolutionAgent
 from agents.response_composer_agent import ResponseComposerAgent
 
-from bus.event_bus import EventBus
+from core.message_hub import MessageHub
 from core.deps import Deps
-from core.findings import Findings
+from core.blackboard import Blackboard
 from core.llm_factory import make_model
 from core.logger import logger
 
@@ -1557,10 +1617,10 @@ from db.connection import Database
 from db.repositories.facade import RepoFacade
 from db.repositories.policy_repo import PolicyRepository
 
-from schemas.events.inbound import CustomerMessageEvent
-from schemas.events.findings import (
-    PurchaseVerifiedEvent, CustomerProfileEvent, ComplaintTypeEvent,
-    RefundEligibilityEvent, ResolutionOptionsEvent, CustomerResponseEvent,
+from schemas.contract.inbound import CustomerMessageContract
+from schemas.contract.findings import (
+    PurchaseVerifiedContract, CustomerProfileContract, ComplaintTypeContract,
+    RefundEligibilityContract, ResolutionOptionsContract, CustomerResponseContract,
 )
 
 from tools.agent_logger import log_decision
@@ -1575,24 +1635,17 @@ PROVIDER = "openai:gpt-4o-mini"
 
 
 async def handle_customer_message(
-    message: CustomerMessageEvent,
+    message: CustomerMessageContract,
     repo: RepoFacade,
     policy,
 ) -> dict:
-    """Handle one customer request end-to-end.
-
-    Creates a fresh EventBus, Findings, and Deps per request.
-    Agents are instantiated, subscribed, and the cascade is triggered
-    by a single bus.publish(message) call.
-    The call does not return until the full cascade completes.
-    """
-    bus      = EventBus()
-    findings = Findings()
+    bus   = MessageHub()
+    board = Blalckboard()
 
     deps = Deps(
         repo=repo,
         bus=bus,
-        findings=findings,
+        board=board,
         policy=policy,
         message_id=message.message_id,
         customer_id=message.customer_id,
@@ -1600,12 +1653,11 @@ async def handle_customer_message(
         total_tokens=0,
     )
 
-    # ── Instantiate agents ────────────────────────────────────────────────────
     purchase_agent = PurchaseVerificationAgent(
         name="purchase_verification",
         agent=Agent(
             model=make_model(PROVIDER), deps_type=Deps,
-            output_type=PurchaseVerifiedEvent,
+            output_type=PurchaseVerifiedContract,
             tools=[log_decision, get_order_summary,
                    get_order_line_items, get_order_total],
         ),
@@ -1614,7 +1666,7 @@ async def handle_customer_message(
         name="customer_history",
         agent=Agent(
             model=make_model(PROVIDER), deps_type=Deps,
-            output_type=CustomerProfileEvent,
+            output_type=CustomerProfileContract,
             tools=[log_decision, get_customer_profile,
                    get_customer_order_count,
                    get_recent_complaints, get_complaint_count],
@@ -1624,7 +1676,7 @@ async def handle_customer_message(
         name="complaint_classification",
         agent=Agent(
             model=make_model(PROVIDER), deps_type=Deps,
-            output_type=ComplaintTypeEvent,
+            output_type=ComplaintTypeContract,
             tools=[log_decision],
         ),
     )
@@ -1641,7 +1693,7 @@ async def handle_customer_message(
         name="resolution",
         agent=Agent(
             model=make_model(PROVIDER), deps_type=Deps,
-            output_type=ResolutionOptionsEvent,
+            output_type=ResolutionOptionsContract,
             tools=[log_decision],
         ),
     )
@@ -1649,18 +1701,14 @@ async def handle_customer_message(
         name="response_composer",
         agent=Agent(
             model=make_model(PROVIDER), deps_type=Deps,
-            output_type=CustomerResponseEvent,
+            output_type=CustomerResponseContract,
             tools=[log_decision, get_customer_profile],
         ),
     )
 
-    # ── Subscribe all agents — deps captured in closure per agent ─────────────
-    #
-    # Phase 1 agents subscribe to CustomerMessageEvent.
-    # Phase 2 agents subscribe to their respective trigger events.
-    # The bus fan-out and gate conditions drive the entire cascade from here.
-    # No orchestrator. No scheduler. No polling loop.
-    #
+    # Subscribe all agents — this builds the bus dictionary.
+    # Each agent appends its handler to the list for its contract type.
+    # Nothing runs here. The dictionary is just populated.
     for agent in [
         purchase_agent,
         history_agent,
@@ -1672,19 +1720,15 @@ async def handle_customer_message(
     ]:
         agent.subscribe(bus, deps)
 
-    # ── Single publish triggers the entire cascade ────────────────────────────
-    #
-    # bus.publish(message) calls asyncio.gather() on all Phase 1 handlers.
-    # All four LLM calls go out simultaneously.
-    # Each agent posts its finding and publishes its event when its LLM responds.
-    # Phase 2 gate checks fire inside Phase 1 publish calls (nested awaits).
-    # This call does not return until deps.findings.response is set.
-    #
+    # Single publish call kicks off the entire cascade.
+    # bus.publish() looks up CustomerMessageContract in the dictionary,
+    # finds 4 handlers, and calls asyncio.gather() on them.
+    # This call does not return until deps.board.response is set.
     logger.info(f"[{message.message_id}] cascade start")
     await bus.publish(message)
     logger.info(f"[{message.message_id}] cascade complete")
 
-    response = deps.findings.response
+    response = deps.board.response
     return {
         "resolved":      response.resolved      if response else False,
         "response":      response.response       if response else "System error",
@@ -1694,15 +1738,13 @@ async def handle_customer_message(
 
 
 async def main():
-    # Pool initialised once here. All repos call Database.get_pool() and
-    # receive this same pool via the singleton. No pool passed to repos.
     await Database.get_pool()
 
     repo   = RepoFacade()
     policy = await PolicyRepository().get()
 
     try:
-        message = CustomerMessageEvent(
+        message = CustomerMessageContract(
             message_id=str(uuid.uuid4()),
             customer_id="C001",
             order_id="ORD-1001",
@@ -1739,17 +1781,17 @@ directly: `get_order` with mismatched `customer_id` returns `None`, `get_history
 **Phase 2 — Schemas** (`schemas/`)
 
 Instantiate each schema with dummy data, round-trip `model_dump()` / `model_validate()`.
-All event schemas carry `message_id`. No schema has methods.
+All contract schemas carry `message_id`. No schema has methods.
 
-**Phase 3 — EventBus** (`bus/event_bus.py`)
+**Phase 3 — MessageHub** (`core/message_hub.py`)
 
 Verify fan-out with a standalone script: three dummy async handlers subscribed to the same
-event type, one `publish()` call, confirm all three fire concurrently. Confirm handlers for
-other event types are not called.
+contract type, one `publish()` call, confirm all three fire. Confirm handlers for other contract
+types are not called.
 
 **Phase 4 — Core** (`core/`)
 
-Build `Findings` and `Deps`. Confirm `Findings.is_complete()` is `False` until `response`
+Build `Blackboard` and `Deps`. Confirm `Blackboard.is_complete()` is `False` until `response`
 is set.
 
 **Phase 5 — Tools** (`tools/`)
@@ -1767,7 +1809,7 @@ simultaneously and confirm `_fired` prevents double-posting.
 
 Build in order: `ComplaintClassificationAgent` → `PurchaseVerificationAgent` →
 `CustomerHistoryAgent` → `SentimentAgent`. For each: subscribe to a live bus with deps,
-call `bus.publish(CustomerMessageEvent)`, confirm finding posted to `deps.findings` and
+call `bus.publish(CustomerMessageContract)`, confirm finding posted to `deps.board` and
 published to bus.
 
 **Phase 8 — Phase 2 agents** (`agents/`)
@@ -1779,9 +1821,9 @@ is a no-op.
 
 **Phase 9 — Integration** (`main.py`)
 
-Run end-to-end with sample message. Confirm: Phase 1 agents activate concurrently,
-`log_decision` lines appear for all LLM agents, `RefundEligibilityAgent` produces no token
-lines, `CustomerResponseEvent` is the final output with `resolved=True`.
+Run end-to-end with sample message. Confirm: the 4 handlers for `CustomerMessageContract` start
+concurrently, `log_decision` lines appear for all LLM agents, `RefundEligibilityAgent` produces
+no token lines, `CustomerResponseContract` is the final output with `resolved=True`.
 
 ---
 
@@ -1792,11 +1834,7 @@ lines, `CustomerResponseEvent` is the final output with `resolved=True`.
 ```json
 {
   "resolved": true,
-  "response": "Hi Aisha, I'm really sorry about the damaged packaging and the faulty
-               key — that's not the experience we want for you. I've approved a full
-               refund of RM149.90 to your original payment method, arriving within
-               3-5 business days. I've also logged a formal complaint so our quality
-               team can investigate. Thank you for letting us know.",
+  "response": "Hi Aisha, I'm really sorry about the damaged packaging and the faulty key — that's not the experience we want for you. I've approved a full refund of RM149.90 to your original payment method, arriving within 3-5 business days. I've also logged a formal complaint so our quality team can investigate. Thank you for letting us know.",
   "actions_taken": ["refund_approved", "complaint_filed"],
   "total_tokens": 4820
 }
@@ -1807,8 +1845,7 @@ lines, `CustomerResponseEvent` is the final output with `resolved=True`.
 ```json
 {
   "resolved": false,
-  "response": "We were unable to verify your purchase with the order number provided.
-               Please contact our support team directly with your order confirmation.",
+  "response": "We were unable to verify your purchase with the order number provided. Please contact our support team directly with your order confirmation.",
   "actions_taken": [],
   "total_tokens": 1240
 }

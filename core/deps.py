@@ -1,6 +1,9 @@
 from dataclasses import dataclass
+
+from schemas.policy import Policy
+from .blackboard import Blackboard
+from .message_hub import MessageHub
 from db.repositories.facade_repo import FacadeRepos
-from schemas.data.policy import Policy
 
 @dataclass
 class Deps:
@@ -8,7 +11,7 @@ class Deps:
 
     db           — async MySQL wrapper. Agents query through tools only.
     bus          — event bus. Agents publish findings through it.
-    findings     — accumulates agent outputs for this request.
+    board        — accumulates agent outputs for this request.
     policy       — single policy config object, loaded once at startup.
     message_id,
     customer_id,
@@ -16,9 +19,9 @@ class Deps:
     total_tokens — accumulated across all LLM agent calls for this request.
     """
 
-    bus:          EventBus
+    hub:          MessageHub
     repos:        FacadeRepos
-    findings:     Findings
+    board:        Blackboard
     policy:       Policy
     message_id:   str
     customer_id:  str

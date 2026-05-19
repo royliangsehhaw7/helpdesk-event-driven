@@ -3,11 +3,11 @@
 -- Customer Service MAS — MySQL Schema
 -- ============================================================
 
-CREATE DATABASE IF NOT EXISTS customer_service
+CREATE DATABASE IF NOT EXISTS helpdesk_db
     CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;
 
-USE customer_service;
+USE helpdesk_db;
 
 -- ------------------------------------------------------------
 -- customers

@@ -4,59 +4,56 @@ from typing import Callable
 from pydantic import BaseModel
 
 
-class EventBus:
-    """Pure Observer fan-out. Zero domain knowledge.
+# class Dispatcher:
+#     """Pure Observer fan-out. Zero domain knowledge.
 
-    subscribe(event_type, handler):
-        Register an async handler for an event type.
-        Handler signature: async def handler(event: BaseModel) -> None
-        Called once per agent per event type at startup.
-
-    publish(event):
-        Fan out to all registered handlers for type(event) via asyncio.gather().
-        Does not return until all handlers (and their downstream publishes) complete.
-        Handlers for other event types are never called.
-    """
-
-    def __init__(self):
-        self._subscribers: dict[type, list[Callable]] = defaultdict(list)
-
-    def subscribe(self, event_type: type, handler: Callable) -> None:
-        self._subscribers[event_type].append(handler)
-
-    async def publish(self, event: BaseModel) -> None:
-        handlers = self._subscribers.get(type(event), [])
-        if handlers:
-            await asyncio.gather(*[h(event) for h in handlers])
+#     subscribe(event_type, handler):
+#         Register an async handler for an event type.
+#         Handler signature: async def handler(event: BaseModel) -> None
+#         Called once per agent per event type at startup.
+#     publish(event):
+#         Fan out to all registered handlers for type(event) via asyncio.gather().
+#         Does not return until all handlers (and their downstream publishes) complete.
+#         Handlers for other event types are never called.
+#     """
+#     def __init__(self):
+#         self._subscribers: dict[type, list[Callable]] = defaultdict(list)
+#     def subscribe(self, event_type: type, handler: Callable) -> None:
+#         self._subscribers[event_type].append(handler)
+#     async def publish(self, event: BaseModel) -> None:
+#         handlers = self._subscribers.get(type(event), [])
+#         if handlers:
+#             await asyncio.gather(*[h(event) for h in handlers])
 
 
 # ===== imperative version
 import asyncio
 
-class EventBus:
+
+class MessageHub:
     def __init__(self):
         # A plain, standard dictionary.
         # Key: A Python class type (e.g., UserRegisteredEvent)
         # Value: A list containing function objects
         self._subscribers = {}
 
-    def subscribe(self, event_type, handler):
+    def subscribe(self, contract_type, handler):
         # Check if this event type is already a key in our dictionary
-        if event_type not in self._subscribers:
+        if contract_type not in self._subscribers:
             # If it's not there, create an empty list for it
-            self._subscribers[event_type] = []
+            self._subscribers[contract_type] = []
         
         # Grab the list for this event type and append the function to it
-        self._subscribers[event_type].append(handler)
+        self._subscribers[contract_type].append(handler)
 
-    async def publish(self, event):
+    async def publish(self, contract):
         # Get the actual class type of the incoming object
         # Equivalent to event.GetType() in C#
-        event_type = type(event)
+        contract_type = type(contract)
         
         # Look up the list of subscriber functions for this specific type
         # If no one subscribed, default to an empty list []
-        handlers = self._subscribers.get(event_type, [])
+        handlers = self._subscribers.get(contract_type, [])
         
         # If the list is empty, there is nothing to do. Exit early.
         if not handlers:
@@ -70,7 +67,7 @@ class EventBus:
             # Call the async function passing the event data.
             # Crucial: This does NOT execute the function yet!
             # It just creates a "coroutine" object (an unstarted task).
-            coroutine_task = handler(event)
+            coroutine_task = handler(contract)
             
             # Put that unstarted task into our tracking list
             tasks_to_run.append(coroutine_task)
@@ -79,3 +76,4 @@ class EventBus:
         # Equivalent to: await Task.WhenAll(tasks_to_run)
         # This is where the single thread begins executing them.
         await asyncio.gather(*tasks_to_run)
+        

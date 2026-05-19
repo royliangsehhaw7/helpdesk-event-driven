@@ -7,7 +7,7 @@
 A learning-oriented multi-agent system that handles customer service requests end-to-end.
 The system runs Phase 1 analysis agents concurrently via `asyncio.gather()`, then runs
 Phase 2 synthesis agents sequentially in `main.py` in explicit order. All agent results
-are shared through a single `Findings` object passed to every agent.
+are shared through a single `Blackboard` object passed to every agent.
 
 ---
 
@@ -21,16 +21,16 @@ finish, then runs Phase 2 agents one at a time in dependency order.
 There is no event bus. There are no subscriptions. There are no closures. The flow is
 readable top to bottom in `main.py`.
 
-### 2.2 Findings — the shared notepad
+### 2.2 Blackboard — the shared notepad
 
-All agents share one `Findings` object created per request in `main.py`.
+All agents share one `Blackboard` object created per request in `main.py`.
 
 - Phase 1 agents write their results into it
 - `asyncio.gather()` returns only after all Phase 1 agents have written their results
 - Phase 2 agents read from it and write their own results back into it
 
 No results are passed as function parameters between agents. Every agent reads and writes
-directly from `findings`.
+directly from `board`.
 
 ### 2.3 Agents
 
@@ -38,13 +38,13 @@ There are seven agents. `main.py` is the orchestrator.
 
 | Agent | Phase | Reads from findings | Writes to findings |
 |---|---|---|---|
-| `PurchaseVerificationAgent` | 1 | — | `findings.purchase` |
-| `CustomerHistoryAgent` | 1 | — | `findings.profile` |
-| `ComplaintClassificationAgent` | 1 | — | `findings.complaint_type` |
-| `SentimentAgent` | 1 | `findings.profile` | `findings.profile.sentiment_*` |
-| `RefundEligibilityAgent` | 2 | `findings.purchase` + `findings.complaint_type` | `findings.refund_eligibility` |
-| `ResolutionAgent` | 2 | `findings.purchase` + `findings.profile` + `findings.complaint_type` + `findings.refund_eligibility` | `findings.resolution` |
-| `ResponseComposerAgent` | 2 | `findings.resolution` + `findings.profile` + `findings.complaint_type` | `findings.response` |
+| `PurchaseVerificationAgent` | 1 | — | `board.purchase` |
+| `CustomerHistoryAgent` | 1 | — | `board.profile` |
+| `ComplaintClassificationAgent` | 1 | — | `board.complaint_type` |
+| `SentimentAgent` | 1 | `board.profile` | `board.profile.sentiment_*` |
+| `RefundEligibilityAgent` | 2 | `board.purchase` + `board.complaint_type` | `board.refund_eligibility` |
+| `ResolutionAgent` | 2 | `board.purchase` + `board.profile` + `board.complaint_type` + `board.refund_eligibility` | `board.resolution` |
+| `ResponseComposerAgent` | 2 | `board.resolution` + `board.profile` + `board.complaint_type` | `board.response` |
 
 
 ---
@@ -85,43 +85,43 @@ driven by whichever Phase 1 agent finishes last.
 
 ```text
 refund_agent     
-    └── reads findings.purchase + findings.complaint_type
-    └── writes findings.refund_eligibility
+    └── reads board.purchase + board.complaint_type
+    └── writes board.refund_eligibility
 
 resolution_agent 
-    └── reads findings.refund_eligibility + findings.profile + findings.complaint_type + findings.purchase
-    └── writes findings.resolution
+    └── reads board.refund_eligibility + board.profile + board.complaint_type + board.purchase
+    └── writes board.resolution
 
 composer_agent   
-    └── reads findings.resolution + findings.profile + findings.complaint_type
-    └── writes findings.response
+    └── reads board.resolution + board.profile + board.complaint_type
+    └── writes board.response
 ```
 
 ### 3.3 Complete execution flow
 ```text
 main.py: 
     |
-    └──findings = Findings()
+    └──board = Blackboard()
     └── asyncio.gather() ← all 4 start, all 4 HTTP requests in-flight
-        └── purchase_agent  → await LLM → findings.purchase = result
-        └── history_agent   → await LLM → findings.profile = result
-        └── classif_agent   → await LLM → findings.complaint_type = result
-        └── sentiment_agent → await LLM → findings.profile.sentiment_* = result
-    └── gather() returns — findings fully written
+        └── purchase_agent  → await LLM → board.purchase = result
+        └── history_agent   → await LLM → board.profile = result
+        └── classif_agent   → await LLM → board.complaint_type = result
+        └── sentiment_agent → await LLM → board.profile.sentiment_* = result
+    └── gather() returns — board fully written
     |
-    └── await refund_agent.run(findings, deps)
+    └── await refund_agent.run(board, deps)
             → pure python, no LLM
-            → findings.refund_eligibility = result
+            → board.refund_eligibility = result
     |
-    └── await resolution_agent.run(findings, deps)
+    └── await resolution_agent.run(board, deps)
         → await LLM
-        → findings.resolution = result
+        → board.resolution = result
     |
-    └── await composer_agent.run(findings, deps)
+    └── await composer_agent.run(board, deps)
         → await LLM
-        → findings.response = result
+        → board.response = result
     |
-    └── return findings.response
+    └── return board.response
 ```
 
 ---
@@ -579,9 +579,9 @@ class CustomerResponseEvent(BaseModel):
 
 ## 7. Core Infrastructure
 
-### 7.1 Findings
+### 7.1 Blackboard
 
-**Location**: `core/findings.py`
+**Location**: `core/blackboard.py`
 
 ```python
 from dataclasses import dataclass
@@ -591,7 +591,7 @@ from schemas.events.findings import (
 )
 
 @dataclass
-class Findings:
+class Blackboard:
     """Result accumulator for one request lifecycle.
 
     Phase 1 agents write here after their LLM call completes.
@@ -616,7 +616,7 @@ class Findings:
 ```python
 from dataclasses import dataclass
 from bus.event_bus import EventBus
-from core.findings import Findings
+from core.blackboard import Blackboard
 from db.repositories.facade import RepoFacade
 from schemas.data.policy import Policy
 
@@ -626,7 +626,7 @@ class Deps:
 
     repo         — facade grouping all repositories. Tools call ctx.deps.repo.<repo>.<method>().
     bus          — event bus. Agents publish findings through it.
-    findings     — accumulates agent output events for this request.
+    board        — accumulates agent output events for this request.
     policy       — single policy config, loaded once at startup.
     message_id,
     customer_id,
@@ -635,7 +635,7 @@ class Deps:
     """
     repo:         RepoFacade
     bus:          EventBus
-    findings:     Findings
+    board:        Blackboard
     policy:       Policy
     message_id:   str
     customer_id:  str
@@ -776,7 +776,7 @@ async def get_complaint_count(ctx: RunContext[Deps]) -> str:
 
 Each agent has one domain responsibility, one subscription set, and one tool set. The LLM calls
 tools mid-reasoning to pull exactly the data it needs — never pre-loaded. Each agent posts its
-finding to `deps.findings` and publishes it to the bus. No agent knows or cares what other
+finding to `deps.board` and publishes it to the bus. No agent knows or cares what other
 agents exist.
 
 All Phase 2 agents carry an `asyncio.Lock` and a `_fired` flag. See Section 3.4 for the full
@@ -791,7 +791,7 @@ explanation of why this is mandatory.
 from abc import ABC, abstractmethod
 from pydantic_ai import Agent
 from core.deps import Deps
-from core.findings import Findings
+from core.blackboard import Blackboard
 from schemas.events.inbound import CustomerMessageEvent
 
 
@@ -818,7 +818,7 @@ class BaseAgent(ABC):
 **Location**: `agents/purchase_verification_agent.py`
 
 - **Reads**: `message.order_id`, `message.customer_id`
-- **Writes**: `findings.purchase`
+- **Writes**: `board.purchase`
 - **Tools**: `get_order_summary`, `get_order_line_items`, `get_order_total`, `log_decision`
 
 ````python
@@ -846,7 +846,7 @@ class PurchaseVerificationAgent(BaseAgent):
             Call log_decision once. Return a PurchaseVerifiedEvent.
         """
 
-    async def run(self, message: CustomerMessageEvent, findings: Findings, deps: Deps) -> None:
+    async def run(self, message: CustomerMessageEvent, board: Blackboard, deps: Deps) -> None:
         result = await self._agent.run(
             f"Verify purchase for order {message.order_id} "
             f"by customer {message.customer_id}. "
@@ -854,7 +854,7 @@ class PurchaseVerificationAgent(BaseAgent):
             deps=deps,
             instructions=self.get_instruction(),
         )
-        findings.purchase = result.output
+        board.purchase = result.output
 ````
 
 ---
@@ -863,7 +863,7 @@ class PurchaseVerificationAgent(BaseAgent):
 **Location**: `agents/customer_history_agent.py`
 
 - **Reads**: `message.customer_id`
-- **Writes**: `findings.profile`
+- **Writes**: `board.profile`
 - **Tools**: `get_customer_profile`, `get_customer_order_count`, `get_recent_complaints`, `get_complaint_count`, `log_decision`
 
 ````python
@@ -892,14 +892,14 @@ class CustomerHistoryAgent(BaseAgent):
             Call log_decision once. Return a CustomerProfileEvent.
         """
 
-    async def run(self, message: CustomerMessageEvent, findings: Findings, deps: Deps) -> None:
+    async def run(self, message: CustomerMessageEvent, board: Blackboard, deps: Deps) -> None:
         result = await self._agent.run(
             f"Build profile for customer {message.customer_id}. "
             f"Message context: {message.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )
-        findings.profile = result.output
+        board.profile = result.output
 ````
 
 ---
@@ -908,7 +908,7 @@ class CustomerHistoryAgent(BaseAgent):
 **Location**: `agents/complaint_classification_agent.py`
 
 - **Reads**: `message.message`
-- **Writes**: `findings.complaint_type`
+- **Writes**: `board.complaint_type`
 - **Tools**: `log_decision`
 
 ````python
@@ -937,13 +937,13 @@ class ComplaintClassificationAgent(BaseAgent):
             Call log_decision once. Return a ComplaintTypeEvent.
         """
 
-    async def run(self, message: CustomerMessageEvent, findings: Findings, deps: Deps) -> None:
+    async def run(self, message: CustomerMessageEvent, board: Blackboard, deps: Deps) -> None:
         result = await self._agent.run(
             f"Classify this complaint: {message.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )
-        findings.complaint_type = result.output
+        board.complaint_type = result.output
 ````
 
 ---
@@ -952,8 +952,8 @@ class ComplaintClassificationAgent(BaseAgent):
 **Location**: `agents/sentiment_agent.py`
 
 - **Reads**: `message.message`
-- **Writes**: `findings.profile.sentiment_score`, `findings.profile.sentiment_label`
-- **Note**: Runs inside gather() alongside the other Phase 1 agents. `findings.profile`
+- **Writes**: `board.profile.sentiment_score`, `board.profile.sentiment_label`
+- **Note**: Runs inside gather() alongside the other Phase 1 agents. `board.profile`
   is guaranteed to be set by the time sentiment writes to it because both agents run
   concurrently — if sentiment finishes before history, it checks and holds.
 - **Tools**: `log_decision`
@@ -982,16 +982,16 @@ class SentimentAgent(BaseAgent):
             Return {"sentiment_score": float, "sentiment_label": str}.
         """
 
-    async def run(self, message: CustomerMessageEvent, findings: Findings, deps: Deps) -> None:
+    async def run(self, message: CustomerMessageEvent, board: Blacboard, deps: Deps) -> None:
         result = await self._agent.run(
             f"Score the sentiment of this message: {message.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )
         score = result.output
-        if findings.profile is not None:
-            findings.profile.sentiment_score = score["sentiment_score"]
-            findings.profile.sentiment_label = score["sentiment_label"]
+        if board.profile is not None:
+            board.profile.sentiment_score = score["sentiment_score"]
+            board.profile.sentiment_label = score["sentiment_label"]
 ````
 
 ---
@@ -1000,8 +1000,8 @@ class SentimentAgent(BaseAgent):
 
 **Location**: `agents/refund_eligibility_agent.py`
 
-- **Reads**: `findings.purchase`, `findings.complaint_type`, `deps.policy`
-- **Writes**: `findings.refund_eligibility`
+- **Reads**: `board.purchase`, `board.complaint_type`, `deps.policy`
+- **Writes**: `board.refund_eligibility`
 - **No LLM** — pure Python logic against policy rules
 
 ````python
@@ -1013,13 +1013,13 @@ class RefundEligibilityAgent(BaseAgent):
     def get_instruction(self) -> str:
         return ""
 
-    async def run(self, findings: Findings, deps: Deps) -> None:
-        purchase  = findings.purchase
-        complaint = findings.complaint_type
+    async def run(self, board: Blackboard, deps: Deps) -> None:
+        purchase  = board.purchase
+        complaint = board.complaint_type
         policy    = deps.policy
 
         if not purchase.verified:
-            findings.refund_eligibility = RefundEligibilityEvent(
+            board.refund_eligibility = RefundEligibilityEvent(
                 message_id=purchase.message_id,
                 eligible=False,
                 reason="Purchase could not be verified",
@@ -1030,7 +1030,7 @@ class RefundEligibilityAgent(BaseAgent):
         days   = purchase.days_since_purchase or 0
 
         if days > window:
-            findings.refund_eligibility = RefundEligibilityEvent(
+            board.refund_eligibility = RefundEligibilityEvent(
                 message_id=purchase.message_id,
                 eligible=False,
                 reason=f"Purchase is {days} days old. Refund window is {window} days.",
@@ -1038,7 +1038,7 @@ class RefundEligibilityAgent(BaseAgent):
             return
 
         auto = complaint.complaint_type in policy.auto_refund_complaint_types
-        findings.refund_eligibility = RefundEligibilityEvent(
+        board.refund_eligibility = RefundEligibilityEvent(
             message_id=purchase.message_id,
             eligible=True,
             reason=(
@@ -1055,8 +1055,8 @@ class RefundEligibilityAgent(BaseAgent):
 ### 9.8 ResolutionAgent
 **Location**: `agents/resolution_agent.py`
 
-- **Reads**: `findings.purchase`, `findings.profile`, `findings.complaint_type`, `findings.refund_eligibility`
-- **Writes**: `findings.resolution`
+- **Reads**: `board.purchase`, `board.profile`, `board.complaint_type`, `board.refund_eligibility`
+- **Writes**: `board.resolution`
 - **Tools**: `log_decision`
 
 ````python
@@ -1079,18 +1079,18 @@ class ResolutionAgent(BaseAgent):
             Call log_decision once. Return a ResolutionOptionsEvent.
         """
 
-    async def run(self, findings: Findings, deps: Deps) -> None:
+    async def run(self, board: Blackboard, deps: Deps) -> None:
         result = await self._agent.run(
-            f"Purchase:           {findings.purchase}\n"
-            f"Customer profile:   {findings.profile}\n"
-            f"Complaint type:     {findings.complaint_type}\n"
-            f"Refund eligibility: {findings.refund_eligibility}\n"
+            f"Purchase:           {board.purchase}\n"
+            f"Customer profile:   {board.profile}\n"
+            f"Complaint type:     {board.complaint_type}\n"
+            f"Refund eligibility: {board.refund_eligibility}\n"
             f"Policy:             {deps.policy}\n"
             f"Decide resolution options.",
             deps=deps,
             instructions=self.get_instruction(),
         )
-        findings.resolution = result.output
+        board.resolution = result.output
 ````
 
 ---
@@ -1098,8 +1098,8 @@ class ResolutionAgent(BaseAgent):
 ### 9.9 ResponseComposerAgent
 **Location**: `agents/response_composer_agent.py`
 
-- **Reads**: `findings.resolution`, `findings.profile`, `findings.complaint_type`
-- **Writes**: `findings.response`
+- **Reads**: `board.resolution`, `board.profile`, `board.complaint_type`
+- **Writes**: `board.response`
 - **Tools**: `get_customer_profile`, `log_decision`
 
 ````python
@@ -1120,16 +1120,16 @@ class ResponseComposerAgent(BaseAgent):
             Call log_decision once. Return a CustomerResponseEvent.
         """
 
-    async def run(self, findings: Findings, deps: Deps) -> None:
+    async def run(self, board: Blackboard, deps: Deps) -> None:
         result = await self._agent.run(
-            f"Resolution:      {findings.resolution}\n"
-            f"Customer profile:{findings.profile}\n"
-            f"Complaint:       {findings.complaint_type}\n"
+            f"Resolution:      {board.resolution}\n"
+            f"Customer profile:{board.profile}\n"
+            f"Complaint:       {board.complaint_type}\n"
             f"Write the customer response.",
             deps=deps,
             instructions=self.get_instruction(),
         )
-        findings.response = result.output
+        board.response = result.output
 ---
 
 ## 10. main.py
@@ -1150,7 +1150,7 @@ from agents.resolution_agent import ResolutionAgent
 from agents.response_composer_agent import ResponseComposerAgent
 
 from core.deps import Deps
-from core.findings import Findings
+from core.blackboard import Blackboard
 from core.logger import logger
 from core.llm_factory import make_model
 
@@ -1161,7 +1161,7 @@ from db.repositories.policy_repo import PolicyRepository
 from pydantic_ai import Agent
 
 from schemas.events.inbound import CustomerMessageEvent
-from schemas.events.findings import (
+from schemas.events.board import (
     PurchaseVerifiedEvent, CustomerProfileEvent, ComplaintTypeEvent,
     RefundEligibilityEvent, ResolutionOptionsEvent, CustomerResponseEvent,
 )
@@ -1228,10 +1228,10 @@ composer_agent = ResponseComposerAgent(
 
 async def handle_customer_message(message: CustomerMessageEvent, repo: RepoFacade, policy) -> dict:
 
-    findings = Findings()
+    board = Blackboard()
     deps = Deps(
         repo=repo,
-        findings=findings,
+        board=board,
         policy=policy,
         message_id=message.message_id,
         customer_id=message.customer_id,
@@ -1242,21 +1242,21 @@ async def handle_customer_message(message: CustomerMessageEvent, repo: RepoFacad
     # ── Phase 1 — run all 4 concurrently ─────────────────────────────────────
     logger.info(f"[{message.message_id}] phase 1 start")
     await asyncio.gather(
-        purchase_agent.run(message, findings, deps),
-        history_agent.run(message, findings, deps),
-        classification_agent.run(message, findings, deps),
-        sentiment_agent.run(message, findings, deps),
+        purchase_agent.run(message, board, deps),
+        history_agent.run(message, board, deps),
+        classification_agent.run(message, board, deps),
+        sentiment_agent.run(message, board, deps),
     )
     logger.info(f"[{message.message_id}] phase 1 complete")
 
-    # ── Phase 2 — run sequentially, each reads from findings ─────────────────
+    # ── Phase 2 — run sequentially, each reads from board ─────────────────
     logger.info(f"[{message.message_id}] phase 2 start")
-    await refund_agent.run(findings, deps)
-    await resolution_agent.run(findings, deps)
-    await composer_agent.run(findings, deps)
+    await refund_agent.run(board, deps)
+    await resolution_agent.run(board, deps)
+    await composer_agent.run(board, deps)
     logger.info(f"[{message.message_id}] phase 2 complete")
 
-    response = findings.response
+    response = board.response
     return {
         "resolved":      response.resolved      if response else False,
         "response":      response.response       if response else "System error",
@@ -1305,7 +1305,7 @@ asyncio.run(main())
 - Instantiate each schema with dummy data, round-trip `model_dump()` / `model_validate()`.
 
 **Phase 3 — Core** (`core/`)
-- Build `Findings` and `Deps`. Confirm `Findings.is_complete()` is `False` until `response` is set.
+- Build `Blackboard` and `Deps`. Confirm `Blackboard.is_complete()` is `False` until `response` is set.
 
 **Phase 4 — Tools** (`tools/`)
 - Test each tool directly with a live `RepoFacade`.
@@ -1319,17 +1319,17 @@ outside window, auto-approved type, standard eligible.
   - `ComplaintClassificationAgent` → `PurchaseVerificationAgent` →
 `CustomerHistoryAgent` → `SentimentAgent`. 
   - For each: call `agent.run(message, findings, deps)`
-directly and confirm the correct field is written to `findings`.
+directly and confirm the correct field is written to `board`.
 
 **Phase 7 — Phase 2 agents** (`agents/`)
 - Build in order: 
   - `ResolutionAgent` → `ResponseComposerAgent`. 
-  - Pre-populate `findings` with
+  - Pre-populate `board` with
 dummy Phase 1 results and confirm each agent reads correctly and writes its own field.
 
 **Phase 8 — Integration** (`main.py`)
 - Run end-to-end with sample message. Confirm Phase 1 agents activate concurrently,
-`findings.response` is set after Phase 2 completes.
+`board.response` is set after Phase 2 completes.
 
 ---
 
