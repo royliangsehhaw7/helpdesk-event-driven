@@ -1,5 +1,5 @@
 # Multi-Agent Customer Service System
-## Specification v7.0 — Observer / Pub-Sub Pattern with Conversational Intake, Tool-Based Data Access, and Blackboard-Driven Agent Communication
+## Specification v8.0 — Observer / Pub-Sub Pattern with Conversational Intake, Tool-Based Data Access, and Blackboard-Driven Agent Communication
 
 ---
 
@@ -99,7 +99,7 @@ finding: PurchaseOutput = result.output
 deps.board.purchase = finding
 
 # 2. build lean message and publish to hub
-await deps.hub.publish(PurchaseMessage(
+await deps.hub.publish(PurchaseResultMessage(
     triggered_by="purchase_agent",
     timestamp=datetime.now().isoformat(),
 ))
@@ -120,11 +120,11 @@ The `MessageHub` is a dictionary and an `asyncio.gather()` call. Nothing more.
 # State of the hub after all subscribe() calls:
 {
     ServiceRequestMessage: [purchase_handler, profile_handler, complaint_handler, sentiment_handler],
-    PurchaseMessage:       [refund_handler],
-    ComplaintMessage:      [refund_handler],
-    ProfileMessage:        [resolution_handler],
-    RefundMessage:         [resolution_handler],
-    ResolutionMessage:     [composer_handler],
+    PurchaseResultMessage:       [refund_handler],
+    ComplaintResultMessage:      [refund_handler],
+    ProfileResultMessage:        [resolution_handler],
+    RefundResultMessage:         [resolution_handler],
+    ResolutionResultMessage:     [composer_handler],
 }
 
 # publish() does exactly this:
@@ -182,7 +182,7 @@ Three classes own the system's top-level concerns. They do not overlap.
 | Class | Location | Responsibility |
 |---|---|---|
 | IntakeAgent | `agents/intake_agent.py` | Multi-turn chat with customer. Collects `order_id` and complete complaint description. Signals `ready=True` when done. No hub, no deps, no findings. |
-| CustomerServiceHandler | `service/handler.py` | Initialises DB, policy, repo, LLM models, and agents once at startup. Per request: creates `MessageHub`, `Blackboard`, `Deps`; resets stateful agents; subscribes all agents; fires the single `publish()` call; returns the result dict. |
+| CustomerServiceHandler | `service/handler.py` | Initialises DB, policy, repo, LLM models, and agents once at startup. Per request: creates `MessageHub`, `Blackboard`, `Deps`; subscribes all agents; fires the single `publish()` call; returns the result dict. |
 | MessageHub | `core/message_hub.py` | Pure fan-out. Maps message types to handler lists. Calls `asyncio.gather()` on publish. Zero domain knowledge. |
 
 ---
@@ -201,13 +201,13 @@ There are eight agents in total. One handles intake. Seven handle resolution.
 
 | Agent | Subscribes to | Writes to board | Publishes |
 |---|---|---|---|
-| PurchaseAgent | `ServiceRequestMessage` | `board.purchase` (`PurchaseOutput`) | PurchaseMessage |
-| ProfileAgent | `ServiceRequestMessage` | `board.profile` (`ProfileOutput`) | ProfileMessage |
-| ComplaintAgent | `ServiceRequestMessage` | `board.complaint` (`ComplaintOutput`) | ComplaintMessage |
+| PurchaseAgent | `ServiceRequestMessage` | `board.purchase` (`PurchaseOutput`) | PurchaseResultMessage |
+| ProfileAgent | `ServiceRequestMessage` | `board.profile` (`ProfileOutput`) | ProfileResultMessage |
+| ComplaintAgent | `ServiceRequestMessage` | `board.complaint` (`ComplaintOutput`) | ComplaintResultMessage |
 | SentimentAgent | `ServiceRequestMessage` | updates `board.profile.sentiment_*` in place | — |
-| RefundAgent | PurchaseMessage + `ComplaintMessage` | `board.refund` (`RefundOutput`) | RefundMessage |
-| ResolutionAgent | RefundMessage` + `ProfileMessage` | `board.resolution` (ResolutionOutput) | ResolutionMessage |
-| `ResponseComposerAgent` | `ResolutionMessage` | `board.response` (`ResponseOutput`) | — |
+| RefundAgent | `PurchaseResultMessage` + `ComplaintResultMessage` | `board.refund` (`RefundOutput`) | RefundResultMessage |
+| ResolutionAgent | `RefundResultMessage` + `ProfileResultMessage` | `board.resolution` (`ResolutionOutput`) | ResolutionResultMessage |
+| `ResponseComposerAgent` | `ResolutionResultMessage` | `board.response` (`ResponseOutput`) | — |
 
 `RefundAgent` is pure Python — no LLM, no tools. It applies policy rules directly
 against `deps.board`.
@@ -232,11 +232,11 @@ against `deps.board`.
 | Class | Role |
 |---|---|
 | ServiceRequestMessage | Inbound trigger. First publish call. Carries `customer_id`, `order_id`, `message`, `triggered_by`, `timestamp`. |
-| PurchaseMessage | Published by `PurchaseAgent` after writing to board. Carries `triggered_by`, `timestamp`. |
-| ProfileMessage | Published by `ProfileAgent` after writing to board. Carries `triggered_by`, `timestamp`. |
-| ComplaintMessage | Published by `ComplaintAgent` after writing to board. Carries `triggered_by`, `timestamp`. |
-| RefundMessage | Published by `RefundAgent` after writing to board. Carries `triggered_by`, `timestamp`. |
-| ResolutionMessage | Published by `ResolutionAgent` after writing to board. Carries `triggered_by`, `timestamp`. |
+| PurchaseResultMessage | Published by `PurchaseAgent` after writing to board. Carries `triggered_by`, `timestamp`. |
+| ProfileResultMessage | Published by `ProfileAgent` after writing to board. Carries `triggered_by`, `timestamp`. |
+| ComplaintResultMessage | Published by `ComplaintAgent` after writing to board. Carries `triggered_by`, `timestamp`. |
+| RefundResultMessage | Published by `RefundAgent` after writing to board. Carries `triggered_by`, `timestamp`. |
+| ResolutionResultMessage | Published by `ResolutionAgent` after writing to board. Carries `triggered_by`, `timestamp`. |
 
 `IntakeResult` belongs to neither folder — it is the intake loop's turn-by-turn signal,
 never published to the hub.
@@ -257,8 +257,9 @@ Per-request state is isolated inside `handle()`:
 | Blackboard | Per request | Accumulates this request's agent outputs only. |
 | Deps | Per request | Carries `message_id`, `customer_id`, `order_id`, `total_tokens`, and references to the per-request hub and blackboard. |
 
-Agents that carry `_fired` (`RefundAgent`, `ResolutionAgent`, `ResponseComposerAgent`)
-must be reset before each request's subscribe loop. See Section 3.5.
+All agents are stateless between requests. No agent carries instance-level mutable state
+that needs to be reset. The Blackboard is the only state accumulator, and it is created
+fresh per request.
 
 `IntakeAgent` is per-session — it holds `_history` across turns for one customer
 conversation and is discarded when the session ends.
@@ -314,11 +315,11 @@ The `MessageHub` is a dictionary and an `asyncio.gather()` call. Nothing more.
 {
     ServiceRequestMessage: [purchase_handler, profile_handler,
                             complaint_handler, sentiment_handler],
-    PurchaseMessage:       [refund_handler],
-    ComplaintMessage:      [refund_handler],
-    ProfileMessage:        [resolution_handler],
-    RefundMessage:         [resolution_handler],
-    ResolutionMessage:     [composer_handler],
+    PurchaseResultMessage:       [refund_handler],
+    ComplaintResultMessage:      [refund_handler],
+    ProfileResultMessage:        [resolution_handler],
+    RefundResultMessage:         [resolution_handler],
+    ResolutionResultMessage:     [composer_handler],
 }
 
 # publish() does exactly this:
@@ -331,8 +332,8 @@ async def publish(self, message: BaseModel) -> None:
 - When `publish(ServiceRequestMessage)` is called
   - the hub looks up `ServiceRequestMessage`
     - finds 4 handlers, and calls `asyncio.gather()` on all 4.
-- When `publish(PurchaseMessage)` is called
-  - the hub looks up `PurchaseMessage`
+- When `publish(PurchaseResultMessage)` is called
+  - the hub looks up `PurchaseResultMessage`
     - finds 1 handler, and calls it.
 
 ---
@@ -380,7 +381,6 @@ So the correct statement is:
 
 ```python
 for agent in self._agents:
-    agent.reset()           # clears _fired on stateful agents — no-op on others
     agent.subscribe(hub, deps)
 ```
 
@@ -414,23 +414,20 @@ async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
     result = await self._agent.run(...)           # resumes here
     finding: ComplaintOutput = result.output
     deps.board.complaint = finding                # 1. write to blackboard
-    await deps.hub.publish(ComplaintMessage(      # 2. publish lean message
+    await deps.hub.publish(ComplaintResultMessage(      # 2. publish lean message
         triggered_by="complaint_agent",
         timestamp=datetime.now().isoformat(),
     ))
 ```
 
-`hub.publish(ComplaintMessage)` looks up `ComplaintMessage`. Finds `[refund_handler]`. Calls
-`refund_agent.handle()` immediately — right now, while the other 3 Phase 1 agents are
+`hub.publish(ComplaintResultMessage)` looks up `ComplaintResultMessage`. Finds `[refund_handler]`.
+Calls `refund_agent.handle()` immediately — right now, while the other 3 Phase 1 agents are
 still waiting for their LLM responses:
 
 ```python
 async def handle(self, message, deps: Deps) -> None:
-    async with self._lock:
-        if self._fired:
-            return
-        if deps.board.purchase is None or deps.board.complaint is None:
-            return  # purchase is None — exits silently
+    if deps.board.purchase is None or deps.board.complaint is None:
+        return  # purchase is None — exits silently
 ```
 
 `deps.board.purchase` is `None` because `purchase_agent` has not finished yet. Gate fails.
@@ -445,55 +442,42 @@ async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
     result = await self._agent.run(...)           # resumes here
     finding: PurchaseOutput = result.output
     deps.board.purchase = finding                 # 1. write to blackboard
-    await deps.hub.publish(PurchaseMessage(       # 2. publish lean message
+    await deps.hub.publish(PurchaseResultMessage(       # 2. publish lean message
         triggered_by="purchase_agent",
         timestamp=datetime.now().isoformat(),
     ))
 ```
 
-`hub.publish(PurchaseMessage)` looks up `PurchaseMessage`. Finds `[refund_handler]`. Calls
-`refund_agent.handle()` again — immediately:
+`hub.publish(PurchaseResultMessage)` looks up `PurchaseResultMessage`. Finds `[refund_handler]`.
+Calls `refund_agent.handle()` again:
 
 ```python
 async def handle(self, message, deps: Deps) -> None:
-    async with self._lock:
-        if self._fired:
-            return
-        if deps.board.purchase is None or deps.board.complaint is None:
-            return
-        # purchase is set (just now) and complaint is set (from Step 3)
-        # gate passes
-        self._fired = True  # set inside lock so it never fires twice
-```
-
-Gate passes. Continues outside the lock:
-
-```python
-    finding = self._check(
-        deps.board.purchase,
-        deps.board.complaint,
-        deps.policy,
-    )
+    if deps.board.purchase is None or deps.board.complaint is None:
+        return
+    # purchase is now set, complaint was set in Step 3 — gate passes
+    finding = self._check(deps.board.purchase, deps.board.complaint, deps.policy)
     deps.board.refund = finding
-    await deps.hub.publish(RefundMessage(
+    await deps.hub.publish(RefundResultMessage(
         triggered_by="refund_agent",
         timestamp=datetime.now().isoformat(),
     ))
 ```
 
-`hub.publish(RefundMessage)` looks up `RefundMessage`. Finds `[resolution_handler]`. Calls
-`resolution_agent.handle()` immediately — while `profile_agent` and `sentiment_agent` are
+Gate passes. The gate check contains no `await` — so between the check and the work that
+follows it, no other coroutine can interleave. `RefundAgent` proceeds, writes to the board,
+and publishes `RefundResultMessage`.
+
+`hub.publish(RefundResultMessage)` looks up `RefundResultMessage`. Finds `[resolution_handler]`.
+Calls `resolution_agent.handle()` immediately — while `profile_agent` and `sentiment_agent` are
 still waiting for their LLM responses:
 
 ```python
 async def handle(self, message, deps: Deps) -> None:
-    async with self._lock:
-        if self._fired:
-            return
-        if (deps.board.refund is None
-                or deps.board.profile is None
-                or deps.board.complaint is None):
-            return  # profile is None — profile_agent not done yet — exits silently
+    if (deps.board.refund is None
+            or deps.board.profile is None
+            or deps.board.complaint is None):
+        return  # profile is None — profile_agent not done yet — exits silently
 ```
 
 Gate fails. `resolution_agent` exits silently. Control unwinds back through `refund_agent.handle()`,
@@ -509,26 +493,22 @@ async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
     result = await self._agent.run(...)           # resumes here
     finding: ProfileOutput = result.output
     deps.board.profile = finding                  # 1. write to blackboard
-    await deps.hub.publish(ProfileMessage(        # 2. publish lean message
+    await deps.hub.publish(ProfileResultMessage(        # 2. publish lean message
         triggered_by="profile_agent",
         timestamp=datetime.now().isoformat(),
     ))
 ```
 
-`hub.publish(ProfileMessage)` looks up `ProfileMessage`. Finds `[resolution_handler]`. Calls
-`resolution_agent.handle()`:
+`hub.publish(ProfileResultMessage)` looks up `ProfileResultMessage`. Finds `[resolution_handler]`.
+Calls `resolution_agent.handle()`:
 
 ```python
 async def handle(self, message, deps: Deps) -> None:
-    async with self._lock:
-        if self._fired:
-            return
-        if (deps.board.refund is None
-                or deps.board.profile is None
-                or deps.board.complaint is None):
-            return
-        # all three are now set — gate passes
-        self._fired = True
+    if (deps.board.refund is None
+            or deps.board.profile is None
+            or deps.board.complaint is None):
+        return
+    # all three are now set — gate passes
 ```
 
 Gate passes. Continues:
@@ -537,22 +517,17 @@ Gate passes. Continues:
     result = await self._agent.run(...)
     finding: ResolutionOutput = result.output
     deps.board.resolution = finding
-    await deps.hub.publish(ResolutionMessage(
+    await deps.hub.publish(ResolutionResultMessage(
         triggered_by="resolution_agent",
         timestamp=datetime.now().isoformat(),
     ))
 ```
 
-`hub.publish(ResolutionMessage)` looks up `ResolutionMessage`. Finds `[composer_handler]`. Calls
-`composer_agent.handle()`:
+`hub.publish(ResolutionResultMessage)` looks up `ResolutionResultMessage`. Finds `[composer_handler]`.
+Calls `composer_agent.handle()`:
 
 ```python
-async def handle(self, message: ResolutionMessage, deps: Deps) -> None:
-    async with self._lock:
-        if self._fired:
-            return
-        self._fired = True
-
+async def handle(self, message: ResolutionResultMessage, deps: Deps) -> None:
     result = await self._agent.run(...)
     finding: ResponseOutput = result.output
     deps.board.response = finding
@@ -583,49 +558,33 @@ return {
 
 ---
 
-### 3.6 The race condition — and why locks are mandatory
+### 3.6 Why the gate condition is sufficient — no locks needed
 
-Consider this scenario: `purchase_agent` and `complaint_agent` finish at almost the same
-time. Both call `await deps.hub.publish(...)` in rapid succession. The event loop
-can interleave them:
+`RefundAgent` and `ResolutionAgent` each subscribe to two message types, meaning their
+`handle()` is called twice per request — once for each message they subscribed to. The
+gate condition alone is sufficient to ensure they do real work exactly once. Here is why:
 
-```
-complaint_agent:  deps.board.complaint = ComplaintOutput(...)
-                       await hub.publish(ComplaintMessage(...))
-                             └── refund_agent.handle()
-                                   gate check: purchase ✓  complaint ✓  → PASSES
-                                   ← still inside _check(), hasn't set _fired yet
-
-purchase_agent:        await hub.publish(PurchaseMessage(...))
-                             └── refund_agent.handle()
-                                   gate check: purchase ✓  complaint ✓  → PASSES AGAIN
-```
-
-Both invocations pass the gate. `_check()` runs twice. `RefundMessage` is published
-twice. `ResolutionOutput` fires twice. `ResponseOutput` is written twice.
-
-**The fix: asyncio.Lock with a _fired flag on every agent that must fire only once.**
+Python's `asyncio` is single-threaded. Coroutines only interleave at `await` points —
+between two `await` statements, a coroutine runs uninterrupted. The gate check is pure
+Python with no `await`:
 
 ```python
-async def handle(self, message, deps: Deps) -> None:
-    async with self._lock:
-        if self._fired:
-            return
-        if deps.board.purchase is None or deps.board.complaint is None:
-            return
-        self._fired = True      # set inside lock before releasing
-
-    # only one invocation ever reaches here
-    finding = self._check(...)
-    deps.board.refund = finding
-    await deps.hub.publish(RefundMessage(
-        triggered_by="refund_agent",
-        timestamp=datetime.now().isoformat(),
-    ))
+if deps.board.purchase is None or deps.board.complaint is None:
+    return
 ```
 
-The lock ensures only one invocation can be inside the critical section at a time. The `_fired`
-flag ensures subsequent invocations exit immediately even after the lock is released.
+This check is atomic from asyncio's perspective. No other coroutine can run between
+evaluating the condition and the code that follows it. So the scenario where two
+invocations both pass the gate simultaneously is impossible — only one coroutine can
+be executing at any given moment, and by the time the second call reaches the gate,
+the first has already written to the board and published its message.
+
+The sequence is always:
+- First call → one board field is `None` → gate fails → returns silently
+- Second call → both board fields are set → gate passes → does real work → publishes once
+
+No locks. No flags. No instance state. The blackboard itself is the synchronisation
+mechanism — which is exactly what it was designed for.
 
 ---
 
@@ -633,36 +592,13 @@ flag ensures subsequent invocations exit immediately even after the lock is rele
 
 | Agent | Gate condition | Lock needed |
 |---|---|---|
-| RefundAgent | `purchase` + `complaint` both set | Yes |
-| ResolutionAgent | `refund` + `profile` + `complaint` all set | Yes |
-| ResponseComposerAgent | receives `ResolutionMessage` | Yes (defensive) |
+| RefundAgent | `purchase` + `complaint` both set | No |
+| ResolutionAgent | `refund` + `profile` + `complaint` all set | No |
+| ResponseComposerAgent | no gate — called exactly once | No |
 
-`ResponseComposerAgent` technically only receives one message type and `ResolutionAgent` fires it
-exactly once due to its own lock. But the defensive lock is cheap and makes the invariant explicit.
-
----
-
-### 3.8 Agent reset between requests
-
-`RefundAgent`, `ResolutionAgent`, and `ResponseComposerAgent` carry `_fired` on
-the instance. Because agents are built once and reused across requests, `_fired = True` from
-request 1 would cause the agent to silently exit on request 2.
-
-`BaseAgent` exposes a `reset()` method — no-op by default. Agents that carry `_fired`
-override it:
-
-```python
-def reset(self) -> None:
-    self._fired = False
-```
-
-`CustomerServiceHandler.handle()` calls `reset()` on every agent before the subscribe loop:
-
-```python
-for agent in self._agents:
-    agent.reset()           # clears _fired — no-op on agents without it
-    agent.subscribe(hub, deps)
-```
+`ResponseComposerAgent` subscribes to `ResolutionResultMessage` only. `ResolutionAgent`
+publishes that message exactly once — after its own gate passes. So `ResponseComposerAgent`
+is guaranteed to be called exactly once. No gate required.
 
 ---
 
@@ -717,7 +653,7 @@ customer_service/
 │   │    ├── profile_message.py
 │   │    ├── complaint_message.py
 │   │    ├── refund_message.py
-│   │    └── resolution_message.py       
+│   │    └── resolution_message.py
 │   └── intake_result.py                ← initial chat result (non data/output/schemas)
 │
 ├── service/
@@ -1184,7 +1120,7 @@ class ServiceRequestMessage(BaseModel):
 ```python
 from pydantic import BaseModel
 
-class PurchaseMessage(BaseModel):
+class PurchaseResultMessage(BaseModel):
     triggered_by: str  # "purchase_agent"
     timestamp: str
 ```
@@ -1193,7 +1129,7 @@ class PurchaseMessage(BaseModel):
 ```python
 from pydantic import BaseModel
 
-class ProfileMessage(BaseModel):
+class ProfileResultMessage(BaseModel):
     triggered_by: str  # "profile_agent"
     timestamp: str
 ```
@@ -1202,7 +1138,7 @@ class ProfileMessage(BaseModel):
 ```python
 from pydantic import BaseModel
 
-class ComplaintMessage(BaseModel):
+class ComplaintResultMessage(BaseModel):
     triggered_by: str  # "complaint_agent"
     timestamp: str
 ```
@@ -1211,7 +1147,7 @@ class ComplaintMessage(BaseModel):
 ```python
 from pydantic import BaseModel
 
-class RefundMessage(BaseModel):
+class RefundResultMessage(BaseModel):
     triggered_by: str  # "refund_agent"
     timestamp: str
 ```
@@ -1220,7 +1156,7 @@ class RefundMessage(BaseModel):
 ```python
 from pydantic import BaseModel
 
-class ResolutionMessage(BaseModel):
+class ResolutionResultMessage(BaseModel):
     triggered_by: str  # "resolution_agent"
     timestamp: str
 ```
@@ -1490,8 +1426,11 @@ tools mid-reasoning to pull exactly the data it needs — never pre-loaded. Each
 full output to `deps.board` then publishes a lean message to the hub. No agent knows or cares
 what other agents exist.
 
-All agents that must fire only once carry an `asyncio.Lock` and a `_fired` flag. See Section
-3.6 for the full explanation of why this is mandatory, and Section 3.8 for the reset requirement.
+Phase 2 agents (`RefundAgent`, `ResolutionAgent`) subscribe to multiple message types and are
+therefore called more than once per request. They use a blackboard gate condition to determine
+whether all required inputs are present. The first call that finds a missing dependency exits
+silently. The second call, arriving after all dependencies are on the board, proceeds. The gate
+check contains no `await` — it is atomic from asyncio's perspective, so no locking is required.
 
 ### 9.2 BaseAgent
 
@@ -1514,8 +1453,7 @@ class BaseAgent(ABC):
         return self._name
 
     def reset(self) -> None:
-        """Called before each request's subscribe loop.
-        No-op by default. Agents that carry _fired override this."""
+        """Called before each request's subscribe loop. No-op by default."""
         pass
 
     @abstractmethod
@@ -1636,9 +1574,8 @@ class IntakeAgent:
 - **Responsibility**: Verify the order exists, belongs to this customer, is delivered, and
   determine days since purchase and what was purchased.
 - **Output**: `PurchaseOutput` → `deps.board.purchase`
-- **Publishes**: `PurchaseMessage`
+- **Publishes**: `PurchaseResultMessage`
 - **Tools**: `get_order_summary`, `get_order_line_items`, `get_order_total`, `log_decision`
-- **Lock**: Not needed — writes a unique board field, called once per request.
 
 ```python
 from datetime import datetime
@@ -1646,7 +1583,7 @@ from agents.base_agent import BaseAgent
 from core.message_hub import MessageHub
 from core.deps import Deps
 from schemas.messages.service_request_message import ServiceRequestMessage
-from schemas.messages.purchase_message import PurchaseMessage
+from schemas.messages.purchase_message import PurchaseResultMessage
 from schemas.outputs.purchase_output import PurchaseOutput
 
 
@@ -1687,12 +1624,10 @@ class PurchaseAgent(BaseAgent):
             deps=deps,
             instructions=self.get_instruction(),
         )
-        # 1. write full rich output to blackboard
         finding: PurchaseOutput = result.output
         deps.board.purchase = finding
 
-        # 2. publish lean message to hub
-        await deps.hub.publish(PurchaseMessage(
+        await deps.hub.publish(PurchaseResultMessage(
             triggered_by="purchase_agent",
             timestamp=datetime.now().isoformat(),
         ))
@@ -1701,13 +1636,12 @@ class PurchaseAgent(BaseAgent):
 ### 9.5 ProfileAgent
 
 - **Subscribes to**: `ServiceRequestMessage`
-- **Responsibility**: Build customer profile — tier, order count, complaint count, repeat issue
-  detection. Initialises sentiment to 0.0 for `SentimentAgent` to update.
+- **Responsibility**: Build a customer profile from history. Initialises sentiment fields for
+  `SentimentAgent` to update.
 - **Output**: `ProfileOutput` → `deps.board.profile`
-- **Publishes**: `ProfileMessage`
+- **Publishes**: `ProfileResultMessage`
 - **Tools**: `get_customer_profile`, `get_customer_order_count`, `get_recent_complaints`,
   `get_complaint_count`, `log_decision`
-- **Lock**: Not needed — writes a unique board field.
 
 ```python
 from datetime import datetime
@@ -1715,7 +1649,7 @@ from agents.base_agent import BaseAgent
 from core.message_hub import MessageHub
 from core.deps import Deps
 from schemas.messages.service_request_message import ServiceRequestMessage
-from schemas.messages.profile_message import ProfileMessage
+from schemas.messages.profile_message import ProfileResultMessage
 from schemas.outputs.profile_output import ProfileOutput
 
 
@@ -1757,12 +1691,10 @@ class ProfileAgent(BaseAgent):
             deps=deps,
             instructions=self.get_instruction(),
         )
-        # 1. write full rich output to blackboard
         finding: ProfileOutput = result.output
         deps.board.profile = finding
 
-        # 2. publish lean message to hub
-        await deps.hub.publish(ProfileMessage(
+        await deps.hub.publish(ProfileResultMessage(
             triggered_by="profile_agent",
             timestamp=datetime.now().isoformat(),
         ))
@@ -1774,9 +1706,8 @@ class ProfileAgent(BaseAgent):
 - **Responsibility**: Classify complaint type, severity, keywords, and explicit intent flags
   from the message text. No database queries needed.
 - **Output**: `ComplaintOutput` → `deps.board.complaint`
-- **Publishes**: `ComplaintMessage`
+- **Publishes**: `ComplaintResultMessage`
 - **Tools**: `log_decision` only
-- **Lock**: Not needed — writes a unique board field.
 
 ```python
 from datetime import datetime
@@ -1784,7 +1715,7 @@ from agents.base_agent import BaseAgent
 from core.message_hub import MessageHub
 from core.deps import Deps
 from schemas.messages.service_request_message import ServiceRequestMessage
-from schemas.messages.complaint_message import ComplaintMessage
+from schemas.messages.complaint_message import ComplaintResultMessage
 from schemas.outputs.complaint_output import ComplaintOutput
 
 
@@ -1793,6 +1724,7 @@ class ComplaintAgent(BaseAgent):
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(message):
             await self.handle(message, deps)
+            
         hub.subscribe(ServiceRequestMessage, handler)
 
     def get_instruction(self) -> str:
@@ -1824,12 +1756,10 @@ class ComplaintAgent(BaseAgent):
             deps=deps,
             instructions=self.get_instruction(),
         )
-        # 1. write full rich output to blackboard
         finding: ComplaintOutput = result.output
         deps.board.complaint = finding
 
-        # 2. publish lean message to hub
-        await deps.hub.publish(ComplaintMessage(
+        await deps.hub.publish(ComplaintResultMessage(
             triggered_by="complaint_agent",
             timestamp=datetime.now().isoformat(),
         ))
@@ -1840,10 +1770,9 @@ class ComplaintAgent(BaseAgent):
 - **Subscribes to**: `ServiceRequestMessage`
 - **Responsibility**: Score emotional tone independently. Updates profile sentiment fields
   in place if profile is already posted. If not yet posted, the score is held until profile
-  arrives — a second subscription on `ProfileMessage` applies the update.
+  arrives — a second subscription on `ProfileResultMessage` applies the update.
 - **Output**: in-place update of `deps.board.profile.sentiment_score` and `sentiment_label`
 - **Tools**: `log_decision` only
-- **Lock**: Not needed — in-place field update on an existing object, no publish.
 
 ```python
 class SentimentAgent(BaseAgent):
@@ -1862,7 +1791,7 @@ class SentimentAgent(BaseAgent):
                 deps.board.profile.sentiment_label = self._pending_label
 
         hub.subscribe(ServiceRequestMessage, on_message)
-        hub.subscribe(ProfileMessage, on_profile)
+        hub.subscribe(ProfileResultMessage, on_profile)
 
     def get_instruction(self) -> str:
         return """
@@ -1903,23 +1832,29 @@ class SentimentAgent(BaseAgent):
 
 ### 9.8 RefundAgent
 
-- **Subscribes to**: `PurchaseMessage` AND `ComplaintMessage`
+- **Subscribes to**: `PurchaseResultMessage` AND `ComplaintResultMessage`
 - **Responsibility**: Pure Python eligibility check against policy. No LLM. No database.
-- **Gate condition**: both `deps.board.purchase` and `deps.board.complaint` set.
-- **Lock**: Mandatory — both subscribed messages can arrive and call this handler before either
-  has had a chance to set `_fired`, causing it to run twice without the lock.
+- **Gate condition**: both `deps.board.purchase` and `deps.board.complaint` must be set.
 - **Output**: `RefundOutput` → `deps.board.refund`
-- **Publishes**: `RefundMessage`
+- **Publishes**: `RefundResultMessage`
+
+`RefundAgent` is called twice per request — once when `PurchaseResultMessage` arrives and
+once when `ComplaintResultMessage` arrives. The gate check on the first line of `handle()`
+determines whether both dependencies are on the board. The first call will always find one
+missing and return silently. The second call finds both present and proceeds.
+
+The gate check contains no `await` — it is atomic from asyncio's perspective. No other
+coroutine can interleave between the check and the code that follows it, so no locking is
+required.
 
 ```python
-import asyncio
 from datetime import datetime
 from agents.base_agent import BaseAgent
 from core.message_hub import MessageHub
 from core.deps import Deps
-from schemas.messages.purchase_message import PurchaseMessage
-from schemas.messages.complaint_message import ComplaintMessage
-from schemas.messages.refund_message import RefundMessage
+from schemas.messages.purchase_message import PurchaseResultMessage
+from schemas.messages.complaint_message import ComplaintResultMessage
+from schemas.messages.refund_message import RefundResultMessage
 from schemas.outputs.refund_output import RefundOutput
 
 
@@ -1927,41 +1862,28 @@ class RefundAgent(BaseAgent):
 
     def __init__(self, name: str):
         super().__init__(name, agent=None)
-        self._lock   = asyncio.Lock()
-        self._fired  = False
-
-    def reset(self) -> None:
-        self._fired = False
 
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(message):
             await self.handle(message, deps)
-        hub.subscribe(PurchaseMessage, handler)
-        hub.subscribe(ComplaintMessage, handler)
+        hub.subscribe(PurchaseResultMessage, handler)
+        hub.subscribe(ComplaintResultMessage, handler)
 
     def get_instruction(self) -> str:
         return ""
 
     async def handle(self, message, deps: Deps) -> None:
-        async with self._lock:
-            if self._fired:
-                return
-            if (deps.board.purchase is None
-                    or deps.board.complaint is None):
-                return
-            self._fired = True       # set inside lock before releasing
+        if deps.board.purchase is None or deps.board.complaint is None:
+            return  # one dependency not yet on board — exit silently
 
-        # only one invocation ever reaches here
+        # both dependencies present — proceed
         finding = self._check(
             deps.board.purchase,
             deps.board.complaint,
             deps.policy,
         )
-        # 1. write full output to blackboard
         deps.board.refund = finding
-
-        # 2. publish lean message to hub
-        await deps.hub.publish(RefundMessage(
+        await deps.hub.publish(RefundResultMessage(
             triggered_by="refund_agent",
             timestamp=datetime.now().isoformat(),
         ))
@@ -1999,41 +1921,36 @@ class RefundAgent(BaseAgent):
 
 ### 9.9 ResolutionAgent
 
-- **Subscribes to**: `RefundMessage` AND `ProfileMessage`
+- **Subscribes to**: `RefundResultMessage` AND `ProfileResultMessage`
 - **Gate condition**: `refund`, `profile`, and `complaint` all set on board.
-- **Lock**: Mandatory — both subscribed messages can call this handler before either sets `_fired`.
 - **Output**: `ResolutionOutput` → `deps.board.resolution`
-- **Publishes**: `ResolutionMessage`
+- **Publishes**: `ResolutionResultMessage`
 - **Tools**: `log_decision` only — all context read from `deps.board`
 
+`ResolutionAgent` is called twice per request — once when `RefundResultMessage` arrives and
+once when `ProfileResultMessage` arrives. The same gate pattern as `RefundAgent` applies:
+the first call exits silently, the second proceeds. The gate check is atomic — no locking
+required.
+
 ```python
-import asyncio
 import json
 from datetime import datetime
 from agents.base_agent import BaseAgent
 from core.message_hub import MessageHub
 from core.deps import Deps
-from schemas.messages.refund_message import RefundMessage
-from schemas.messages.profile_message import ProfileMessage
-from schemas.messages.resolution_message import ResolutionMessage
+from schemas.messages.refund_message import RefundResultMessage
+from schemas.messages.profile_message import ProfileResultMessage
+from schemas.messages.resolution_message import ResolutionResultMessage
 from schemas.outputs.resolution_output import ResolutionOutput
 
 
 class ResolutionAgent(BaseAgent):
 
-    def __init__(self, name: str, agent):
-        super().__init__(name, agent)
-        self._lock  = asyncio.Lock()
-        self._fired = False
-
-    def reset(self) -> None:
-        self._fired = False
-
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(message):
             await self.handle(message, deps)
-        hub.subscribe(RefundMessage, handler)
-        hub.subscribe(ProfileMessage, handler)
+        hub.subscribe(RefundResultMessage, handler)
+        hub.subscribe(ProfileResultMessage, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -2056,15 +1973,12 @@ class ResolutionAgent(BaseAgent):
         """
 
     async def handle(self, message, deps: Deps) -> None:
-        async with self._lock:
-            if self._fired:
-                return
-            if (deps.board.refund is None
-                    or deps.board.profile is None
-                    or deps.board.complaint is None):
-                return
-            self._fired = True
+        if (deps.board.refund is None
+                or deps.board.profile is None
+                or deps.board.complaint is None):
+            return  # not all dependencies on board yet — exit silently
 
+        # all dependencies present — proceed
         context = json.dumps({
             "purchase":   deps.board.purchase.model_dump()  if deps.board.purchase  else {},
             "profile":    deps.board.profile.model_dump(),
@@ -2083,12 +1997,10 @@ class ResolutionAgent(BaseAgent):
             deps=deps,
             instructions=self.get_instruction(),
         )
-        # 1. write full rich output to blackboard
         finding: ResolutionOutput = result.output
         deps.board.resolution = finding
 
-        # 2. publish lean message to hub
-        await deps.hub.publish(ResolutionMessage(
+        await deps.hub.publish(ResolutionResultMessage(
             triggered_by="resolution_agent",
             timestamp=datetime.now().isoformat(),
         ))
@@ -2096,40 +2008,32 @@ class ResolutionAgent(BaseAgent):
 
 ### 9.10 ResponseComposerAgent
 
-- **Subscribes to**: `ResolutionMessage`
+- **Subscribes to**: `ResolutionResultMessage`
 - **Responsibility**: Compose the final customer-facing response. All upstream findings are
-  guaranteed present when this agent activates because `ResolutionAgent` only fires after
-  all its own gate conditions pass.
-- **Lock**: Defensive — `ResolutionAgent` fires only once due to its own lock, but the
-  defensive lock here makes the invariant explicit and costs nothing.
+  guaranteed present when this agent activates — `ResolutionAgent` only publishes after all
+  its own gate conditions pass, and it publishes exactly once.
 - **Output**: `ResponseOutput` → `deps.board.response`
 - **Publishes**: nothing — terminal agent.
 - **Tools**: `get_customer_profile`, `log_decision`
 
+`ResponseComposerAgent` subscribes to a single message type published by a single agent.
+It is called exactly once per request. No gate condition is needed.
+
 ```python
-import asyncio
 import json
 from agents.base_agent import BaseAgent
 from core.message_hub import MessageHub
 from core.deps import Deps
-from schemas.messages.resolution_message import ResolutionMessage
+from schemas.messages.resolution_message import ResolutionResultMessage
 from schemas.outputs.response_output import ResponseOutput
 
 
 class ResponseComposerAgent(BaseAgent):
 
-    def __init__(self, name: str, agent):
-        super().__init__(name, agent)
-        self._lock  = asyncio.Lock()
-        self._fired = False
-
-    def reset(self) -> None:
-        self._fired = False
-
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
         async def handler(message):
             await self.handle(message, deps)
-        hub.subscribe(ResolutionMessage, handler)
+        hub.subscribe(ResolutionResultMessage, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -2153,12 +2057,7 @@ class ResponseComposerAgent(BaseAgent):
             Call log_decision once. Return a ResponseOutput.
         """
 
-    async def handle(self, message: ResolutionMessage, deps: Deps) -> None:
-        async with self._lock:
-            if self._fired:
-                return
-            self._fired = True
-
+    async def handle(self, message: ResolutionResultMessage, deps: Deps) -> None:
         context = json.dumps({
             "profile":    deps.board.profile.model_dump()   if deps.board.profile   else {},
             "complaint":  deps.board.complaint.model_dump() if deps.board.complaint else {},
@@ -2172,7 +2071,6 @@ class ResponseComposerAgent(BaseAgent):
             deps=deps,
             instructions=self.get_instruction(),
         )
-        # write to blackboard — terminal agent, no publish
         finding: ResponseOutput = result.output
         deps.board.response = finding
 ```
@@ -2190,8 +2088,8 @@ with no constructor arguments — it initialises the database pool, loads policy
 repo facade, constructs LLM models, and builds all agents internally.
 
 Per-request state (`MessageHub`, `Blackboard`, `Deps`) is created fresh inside `handle()` on
-every call. Stateful agents (`RefundAgent`, `ResolutionAgent`, `ResponseComposerAgent`) are
-reset before each subscribe loop via `agent.reset()`.
+every call. Agents carry no per-request instance state and do not need to be reset between
+requests.
 
 ```python
 import logging
@@ -2233,7 +2131,8 @@ logger = logging.getLogger(__name__)
 
 
 class CustomerServiceHandler:
-    """Resolves a customer message end-to-end using the Observer fan-out pattern.
+    """
+    Resolves a customer message end-to-end using the Observer fan-out pattern.
 
     Built once at startup. Initialises DB, policy, repo, LLM models, and agents
     internally — no constructor arguments required.
@@ -2243,21 +2142,14 @@ class CustomerServiceHandler:
     """
 
     def __init__(self) -> None:
-        # -- LLM models (one per provider/model config)
+        # -- gemini
         factory = LLMFactory("openrouter")
-        self._model = factory.get_model(model="")
+        self._gmodel = factory.get_model(model="")
+        # -- openrouter
+        factory = LLMFactory("openrouter")
+        self._omodel = factory.get_model(model="")
 
-        # -- infrastructure (shared across all requests)
-        self._repo   = RepoFacade()
-        self._policy = None   # loaded async in _init_async()
-
-        # -- agents (built once, reused across requests)
         self._agents = self._build_agents()
-
-    async def _init_async(self) -> None:
-        """Load async resources. Call once before first handle()."""
-        await Database.get_pool()
-        self._policy = await PolicyRepository().get()
 
     def _build_agents(self) -> list:
         """Construct all agents once. Agent instances are stateless across
@@ -2323,31 +2215,32 @@ class CustomerServiceHandler:
         """Handle one customer message. Returns a result dict.
 
         Creates a fresh MessageHub, Blackboard, and Deps for this request.
-        Resets stateful agents, subscribes all agents to the hub, then fires
-        the single publish() call that triggers the entire agent cascade.
+        Subscribes all agents to the hub, then fires the single publish() call
+        that triggers the entire agent cascade.
         """
         hub   = MessageHub()
         board = Blackboard()
+        repo = FacadeRepos()
+
+        policy_repo = PolicyRepository()
+        policy = await policy_repo.get_policy()
+
         deps  = Deps(
-            repo=self._repo,
             hub=hub,
+            repos=repo,
             board=board,
             policy=self._policy,
+
             message_id=message.message_id,
             customer_id=message.customer_id,
             order_id=message.order_id,
+
             total_tokens=0,
         )
 
-        # Reset stateful agents and build the subscription dictionary.
-        # Each agent appends its handler to the list for its message type.
-        # Nothing runs here — the hub is just wired up.
         for agent in self._agents:
-            agent.reset()
             agent.subscribe(hub, deps)
 
-        # Single publish call triggers the entire cascade.
-        # Does not return until deps.board.response is set.
         logger.info(f"[{message.message_id}] cascade start")
         await hub.publish(message)
         logger.info(f"[{message.message_id}] cascade complete")
@@ -2412,8 +2305,6 @@ async def chat(handler: CustomerServiceHandler) -> None:
         if not intake_result.ready:
             continue
 
-        # IntakeAgent has collected order_id and a complete complaint description.
-        # Hand off to CustomerServiceHandler for the full resolution cascade.
         message = ServiceRequestMessage(
             message_id=str(uuid.uuid4()),
             customer_id=CUSTOMER_ID,
@@ -2437,7 +2328,7 @@ asyncio.run(main())
 
 **Phase 1 — Database** (`db/`)
 
-Run `schema.sql`. Verify all tables and seed data. Test `Database.get_pool()` returns the same
+Run `schema.sql`. Verify all tables and data. Test `Database.get_pool()` returns the same
 pool object on repeated calls — confirming singleton behaviour. Test each repository method
 directly: `get_order` with mismatched `customer_id` returns `None`, `get_history` with
 `limit=10` never exceeds 10 rows, `PolicyRepository.get()` returns a valid `Policy` object.
@@ -2469,9 +2360,9 @@ error dict for a non-existent order, `get_recent_complaints` never returns more 
 **Phase 6 — RefundAgent** (`agents/`)
 
 Build first — no LLM. Test `_check()` directly against all branches: purchase not verified,
-outside window, auto-approved type, standard eligible. Manually trigger `handle()` twice
-simultaneously and confirm `_fired` prevents double-posting. Confirm `reset()` clears
-`_fired` and the agent fires correctly on a second request.
+outside window, auto-approved type, standard eligible. Manually trigger `handle()` with one
+board field missing — confirm silent return. Set both fields and trigger again — confirm
+`RefundResultMessage` is published exactly once.
 
 **Phase 7 — Phase 1 resolution agents** (`agents/`)
 
@@ -2483,16 +2374,13 @@ confirm output posted to `deps.board` and lean message published to hub.
 
 Build in order: `ResolutionAgent` → `ResponseComposerAgent`. Confirm gate exits silently when
 findings missing. With all required findings set, confirm agent activates, calls LLM, posts
-finding. Manually test lock: call `handle()` twice in quick succession, confirm second call
-is a no-op. Confirm `reset()` allows the agent to fire again on the next request.
+finding and publishes exactly once.
 
 **Phase 9 — CustomerServiceHandler** (`service/`)
 
 Test with a fully formed `ServiceRequestMessage` (bypassing intake). Confirm: the 4 handlers for
 `ServiceRequestMessage` start concurrently, `log_decision` lines appear for all LLM agents,
-`RefundAgent` produces no token lines, `ResponseOutput` is the final output
-with `resolved=True`. Run two requests in sequence and confirm `reset()` prevents `_fired`
-leaking between them.
+`RefundAgent` produces no token lines, `ResponseOutput` is the final output with `resolved=True`.
 
 **Phase 10 — IntakeAgent** (`agents/`)
 

@@ -6,12 +6,11 @@ class PolicyRepository:
         
     async def get_policy(self) -> dict | None:
         pool = await Database.get_pool()
-        async with self._pool.acquire() as conn:
+        
+        async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                sql = """
-                    select * 
-                    from policy 
-                    where id = 1
+                sql = f"""
+                    select * from policy where id = 1
                 """
                 await cur.execute(sql)
 

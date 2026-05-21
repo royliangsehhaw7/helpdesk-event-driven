@@ -15,30 +15,42 @@ CUSTOMER_ID = "C001"   # in production: resolved from auth / session
 async def main() -> None:
     handler = CustomerServiceHandler()
 
-    try:
-        # -- 1.
-        factory = LLMFactory("openrouter")
-        model = factory.get_model("nvidia/nemotron-3-super-120b-a12b:free")
+    # -- 1.
+    factory = LLMFactory("openrouter")
+    model = factory.get_model("nvidia/nemotron-3-super-120b-a12b:free")
 
-        intakeAgent = IntakeAgent(model)
-        intake_result = await intakeAgent.collect()
+    intakeAgent = IntakeAgent(model)
 
-        # -- 2.
-        service_request = ServiceRequestMessage(
-            message_id=str(uuid.uuid4()),
-            customer_id=CUSTOMER_ID,
-            order_id=intake_result.order_id,
-            message=intake_result.message,
-            timestamp=datetime.now().isoformat()
-        )
+    # -- 2.
+    print("Agent: Hi, how can I help you today?")
+    while True:
+        user_input = input("Customer: ").strip()
+        if not user_input:
+            continue
 
-        # == 3.
-        result = await handler.handle(service_request)
+        intake_result = await intakeAgent.collect(user_input, customer_id=CUSTOMER_ID)
+        print(f"Agent: {intake_result.reply}")
 
-        # -- 4.
-        print(json.dumps(result, indent=2))
-    finally:
-        pass
+        if not intake_result.ready:
+            continue
+        else:
+            break
+
+    # -- 3.
+    # IntakeAgent has collected order_id and a complete complaint description.
+    # Hand off to CustomerServiceHandler for the full resolution cascade.
+    message = ServiceRequestMessage(
+        message_id=str(uuid.uuid4()),
+        customer_id=CUSTOMER_ID,
+        order_id=intake_result.order_id,
+        message=intake_result.message,
+        triggered_by="intake_agent",
+        timestamp=datetime.now().isoformat(),
+    )
+    print(message.model_dump())
+
+    result = await handler.handle(message)
+    #print(json.dumps(result, indent=2))
 
 
 asyncio.run(main())

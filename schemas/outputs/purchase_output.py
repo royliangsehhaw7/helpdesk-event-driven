@@ -1,9 +1,10 @@
 from pydantic import BaseModel
 
 class PurchaseOutput(BaseModel):
-    """What the LLM must produce. Shaped for the model's reasoning."""
-    order_id: str
     verified: bool
-    total_amount: float
-    purchase_date: str
-    within_return_window: bool
+    order_date: str | None = None
+    product_name: str | None = None
+    product_category: str | None = None
+    days_since_purchase: int | None = None
+    order_total: float | None = None
+    reason: str | None = None

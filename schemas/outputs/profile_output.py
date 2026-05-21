@@ -1,7 +1,6 @@
 from pydantic import BaseModel
 
 class ProfileOutput(BaseModel):
-    message_id: str
     customer_id: str
     tier: str
     total_orders: int

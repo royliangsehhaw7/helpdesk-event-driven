@@ -1,11 +1,11 @@
 from dataclasses import dataclass
-from schemas.messages import (
-    PurchaseResultContract, 
-    ProfileResultContract,
-    ComplaintResultContract,
-    RefundResultContract,
-    ResolutionResultContract,
-    CustomerResponseContract
+from schemas.outputs import (
+    PurchaseOutput, 
+    ProfileOutput, 
+    ComplaintOutput, 
+    RefundOutput,
+    ResolutionOutput,
+    ResponseOutput
 )
 
 @dataclass
@@ -18,12 +18,12 @@ class Blackboard:
     One instance per CustomerResponseContract. Discarded when complete.
     """
 
-    purchase:           PurchaseResultContract   | None = None
-    profile:            ProfileResultContract    | None = None
-    complaint_type:     ComplaintResultContract  | None = None
-    refund_eligibility: RefundResultContract     | None = None
-    resolution:         ResolutionResultContract | None = None
-    response:           CustomerResponseContract | None = None
+    purchase:           PurchaseOutput   | None = None
+    profile:            ProfileOutput    | None = None
+    complaint_type:     ComplaintOutput  | None = None
+    refund_eligibility: RefundOutput     | None = None
+    resolution:         ResolutionOutput | None = None
+    response:           ResponseOutput   | None = None
 
 
     def is_complete(self) -> bool:

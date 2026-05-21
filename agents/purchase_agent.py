@@ -1,17 +1,19 @@
+from datetime import datetime
 
-from .base_agent import BaseAgent
-from core.deps import Deps
+from agents.base_agent import BaseAgent
 from core.message_hub import MessageHub
-from schemas.messages import CustomerMessageContract, ServiceRequestContract
+from core.deps import Deps
+
+from schemas.messages import ServiceRequestMessage, PurchaseResultMessage
+from schemas.outputs.purchase_output import PurchaseOutput
+
 
 class PurchaseAgent(BaseAgent):
 
     def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        async def handler(event):
-            await self.handle(event, deps)
-
-        hub.subscribe(CustomerMessageContract, handler)
-
+        async def handler(message):
+            await self.handle(message, deps)
+        hub.subscribe(ServiceRequestMessage, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -32,22 +34,23 @@ class PurchaseAgent(BaseAgent):
             Set verified=False with a clear reason if order not found,
             not belonging to this customer, or not "delivered".
 
-            Call log_decision once. 
-            Return a PurchaseVerifiedContract.
+            Call log_decision once. Return a PurchaseOutput.
         """
 
-
-    async def handle(self, event: ServiceRequestContract, deps: Deps) -> None:
-        result = await self._agent.run(f"""
-                Verify purchase for order {deps.order_id} by customer {deps.customer_id}
-                Customer message: {event.message}
-            """,
+    async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
+        result = await self._agent.run(
+            f"Verify purchase for order {deps.order_id} "
+            f"by customer {deps.customer_id}. "
+            f"Customer message: {message.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )
-        finding: ServiceRequestContract = result.output
+        # 1. write full rich output to blackboard
+        finding: PurchaseOutput = result.output
         deps.board.purchase = finding
-        
-        # -- rightfully we should be publising a contract 
-        await deps.hub.publish(finding)
 
+        # 2. publish lean message to hub
+        await deps.hub.publish(PurchaseResultMessage(
+            triggered_by="purchase_agent",
+            timestamp=datetime.now().isoformat(),
+        ))

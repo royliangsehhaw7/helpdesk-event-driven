@@ -1,10 +1,9 @@
 
 from agents.base_agent import BaseAgent
-from core import Deps, MessageHub, Blackboard
+from core.message_hub import MessageHub
+from core.deps import Deps
 
-from schemas.messages.service_request import CustomerMessageContract
-from schemas.messages.profile_result import CustomerProfileContract
-
+from schemas.messages import ServiceRequestMessage, ProfileResultMessage
 
 class SentimentAgent(BaseAgent):
 
@@ -12,18 +11,17 @@ class SentimentAgent(BaseAgent):
         self._pending_score = None
         self._pending_label = None
 
-        async def on_message(event):
-            await self.handle(event, deps)
+        async def on_message(message):
+            await self.handle(message, deps)
 
-        async def on_profile(event):
+        async def on_profile(message):
             # if sentiment finished before profile was posted, apply now
             if self._pending_score is not None:
-                event.sentiment_score = self._pending_score
-                event.sentiment_label = self._pending_label
-                deps.board.profile = event
+                deps.board.profile.sentiment_score = self._pending_score
+                deps.board.profile.sentiment_label = self._pending_label
 
-        hub.subscribe(CustomerMessageContract, on_message)
-        hub.subscribe(CustomerProfileContract, on_profile)
+        hub.subscribe(ServiceRequestMessage, on_message)
+        hub.subscribe(ProfileResultMessage, on_profile)
 
     def get_instruction(self) -> str:
         return """
@@ -46,9 +44,9 @@ class SentimentAgent(BaseAgent):
             Return {"sentiment_score": float, "sentiment_label": str}.
         """
 
-    async def handle(self, event: CustomerMessageContract, deps: Deps) -> None:
+    async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
         result = await self._agent.run(
-            f"Score the sentiment of this message: {event.message}",
+            f"Score the sentiment of this message: {message.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )

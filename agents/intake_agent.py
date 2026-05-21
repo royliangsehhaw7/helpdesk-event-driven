@@ -1,7 +1,6 @@
 import logging
 from pydantic_ai import Agent
 
-from core.llm_factory import make_model
 from schemas.intake_result import IntakeResult
 
 logger = logging.getLogger(__name__)

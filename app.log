@@ -14,3 +14,90 @@
 2026-05-19 09:09:51,535 [INFO] [intake] customer=C001 input='can we proceed without the order number?...'
 2026-05-19 09:10:04,613 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
 2026-05-19 09:10:07,719 [INFO] [intake] ready=False order_id=None
+2026-05-19 21:27:04,527 [INFO] [intake] customer=C001 input='are you a human?...'
+2026-05-19 21:27:24,668 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-19 21:27:34,403 [INFO] [intake] ready=False order_id=
+2026-05-19 21:29:49,130 [INFO] [intake] customer=C001 input='are you a human?...'
+2026-05-19 21:30:07,142 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-19 21:30:59,788 [INFO] [intake] ready=False order_id=
+2026-05-19 21:31:41,950 [INFO] [intake] customer=C001 input='why do you hallucinate?...'
+2026-05-19 21:31:53,304 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-19 21:31:53,571 [INFO] [intake] ready=False order_id=
+2026-05-19 21:32:32,312 [INFO] [intake] customer=C001 input='what is the capitol city of Ireland?...'
+2026-05-19 21:32:40,639 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-19 21:32:40,666 [INFO] [intake] ready=False order_id=
+2026-05-20 08:28:43,459 [INFO] [intake] customer=C001 input='my order id is C001-1...'
+2026-05-20 08:28:54,102 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 08:28:54,164 [INFO] [intake] ready=False order_id=
+2026-05-20 08:29:04,809 [INFO] [intake] customer=C001 input='its ORD-0001...'
+2026-05-20 08:29:09,449 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 08:29:09,455 [INFO] [intake] ready=False order_id=ORD-0001
+2026-05-20 08:29:28,820 [INFO] [intake] customer=C001 input='the packaging was wet and partially opened...'
+2026-05-20 08:29:35,923 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 08:29:35,929 [INFO] [intake] ready=False order_id=ORD-0001
+2026-05-20 08:29:44,223 [INFO] [intake] customer=C001 input='i would like a refund...'
+2026-05-20 08:29:54,566 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 08:29:55,591 [INFO] [intake] ready=True order_id=ORD-0001
+2026-05-20 08:33:53,569 [INFO] [intake] customer=C001 input='my package came wet and partially opened...'
+2026-05-20 08:34:04,740 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 08:34:22,138 [INFO] [intake] ready=False order_id=null
+2026-05-20 08:34:33,240 [INFO] [intake] customer=C001 input='it is ORD-1233...'
+2026-05-20 08:34:40,982 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 08:34:41,001 [INFO] [intake] ready=False order_id=ORD-1233
+2026-05-20 08:34:48,233 [INFO] [intake] customer=C001 input='a refund please...'
+2026-05-20 08:34:58,573 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 08:35:08,265 [INFO] [intake] ready=True order_id=ORD-1233
+2026-05-20 12:20:50,208 [INFO] [intake] customer=C001 input='my package was partially open and wer. the order id is ORD-1...'
+2026-05-20 12:21:03,604 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:21:12,511 [INFO] [intake] ready=False order_id=
+2026-05-20 12:21:45,519 [INFO] [intake] customer=C001 input='its partially opened and the package was wet. i would like a...'
+2026-05-20 12:21:55,842 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:21:57,672 [INFO] [intake] ready=True order_id=ORD-1001
+2026-05-20 12:33:41,738 [INFO] [intake] customer=C001 input='I would like a refund for my order ORD-1001. its not what i ...'
+2026-05-20 12:33:54,938 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:34:04,979 [INFO] [intake] ready=False order_id=ORD-1001
+2026-05-20 12:34:21,582 [INFO] [intake] customer=C001 input='proceed...'
+2026-05-20 12:34:31,937 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:34:36,272 [INFO] [intake] ready=False order_id=ORD-1001
+2026-05-20 12:35:33,014 [INFO] [intake] customer=C001 input='i have some problems with my order...'
+2026-05-20 12:35:40,990 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:35:41,222 [INFO] [intake] ready=False order_id=
+2026-05-20 12:35:49,431 [INFO] [intake] customer=C001 input='my order is ORD-1001...'
+2026-05-20 12:35:59,762 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:36:01,696 [INFO] [intake] ready=False order_id=ORD-1001
+2026-05-20 12:36:18,259 [INFO] [intake] customer=C001 input='the package was partially opened and its wet...'
+2026-05-20 12:36:26,522 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:36:26,533 [INFO] [intake] ready=False order_id=ORD-1001
+2026-05-20 12:36:31,520 [INFO] [intake] customer=C001 input='all of them...'
+2026-05-20 12:36:41,825 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:36:54,046 [INFO] [intake] ready=False order_id=ORD-1001
+2026-05-20 12:37:08,975 [INFO] [intake] customer=C001 input='i would like a refund...'
+2026-05-20 12:37:19,308 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:37:26,621 [INFO] [intake] ready=True order_id=ORD-1001
+2026-05-20 12:38:48,204 [INFO] [intake] customer=C001 input='i would like a refund for my order ORD-1001...'
+2026-05-20 12:38:57,104 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:38:57,341 [INFO] [intake] ready=False order_id=
+2026-05-20 12:39:13,704 [INFO] [intake] customer=C001 input='the package was partially and it was wet...'
+2026-05-20 12:39:23,683 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:39:23,692 [INFO] [intake] ready=False order_id=
+2026-05-20 12:39:47,383 [INFO] [intake] customer=C001 input='i thought i already metioned the refund earlier?...'
+2026-05-20 12:39:57,709 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:39:57,924 [INFO] [intake] ready=False order_id=
+2026-05-20 12:40:05,030 [INFO] [intake] customer=C001 input='all of them...'
+2026-05-20 12:40:12,309 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:40:12,324 [INFO] [intake] ready=True order_id=ORD-1001
+2026-05-20 12:49:18,586 [INFO] [intake] customer=C001 input='my package came partially opened and all the products in it ...'
+2026-05-20 12:49:29,132 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:49:29,359 [INFO] [intake] ready=False order_id=
+2026-05-20 12:49:38,824 [INFO] [intake] customer=C001 input='my order number ORD-1001...'
+2026-05-20 12:49:47,689 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:49:47,704 [INFO] [intake] ready=False order_id=ORD-1001
+2026-05-20 12:49:55,705 [INFO] [intake] customer=C001 input='i would like a refund...'
+2026-05-20 12:50:01,497 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:50:01,513 [INFO] [intake] ready=True order_id=ORD-1001
+2026-05-20 12:57:38,424 [INFO] [intake] customer=C001 input='my package came partially opened and all products are wet...'
+2026-05-20 12:57:47,307 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:57:47,520 [INFO] [intake] ready=False order_id=
+2026-05-20 12:58:04,311 [INFO] [intake] customer=C001 input='my order is ORD-1001 and i would like a refund...'
+2026-05-20 12:58:09,130 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-20 12:58:09,142 [INFO] [intake] ready=True order_id=ORD-1001

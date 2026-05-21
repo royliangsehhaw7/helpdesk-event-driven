@@ -2,7 +2,8 @@
 from typing import Any
 from pydantic_ai import Agent
 
-from db.repositories.facade_repo import FacadeRepos
+from db.repositories.facade_repo import FacadeRepos, PolicyRepository
+
 from core import Deps, LLMFactory, MessageHub, Blackboard, logger
 from agents import PurchaseAgent, ProfileAgent, ComplaintAgent, SentimentAgent
 
@@ -126,12 +127,14 @@ class CustomerServiceHandler:
         board = Blackboard()
         repo = FacadeRepos()
 
-        deps  = Deps(
-            repo=repo,
-            hub=hub,
-            board=board,
+        policy_repo = PolicyRepository()
+        policy = await policy_repo.get_policy()
 
-            policy=self._policy,
+        deps  = Deps(
+            hub=hub,
+            repos=repo,
+            board=board,
+            policy=policy,
 
             message_id=service_request.message_id,
             customer_id=service_request.customer_id,
