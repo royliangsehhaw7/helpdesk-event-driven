@@ -22,35 +22,37 @@ async def main() -> None:
     intakeAgent = IntakeAgent(model)
 
     # -- 2.
-    print("Agent: Hi, how can I help you today?")
-    while True:
-        user_input = input("Customer: ").strip()
-        if not user_input:
-            continue
+    # print("Agent: Hi, how can I help you today?")
+    # while True:
+    #     user_input = input("Customer: ").strip()
+    #     if not user_input:
+    #         continue
 
-        intake_result = await intakeAgent.collect(user_input, customer_id=CUSTOMER_ID)
-        print(f"Agent: {intake_result.reply}")
+    #     intake_result = await intakeAgent.collect(user_input, customer_id=CUSTOMER_ID)
+    #     print(f"Agent: {intake_result.reply}")
 
-        if not intake_result.ready:
-            continue
-        else:
-            break
+    #     if not intake_result.ready:
+    #         continue
+    #     else:
+    #         break
 
     # -- 3.
     # IntakeAgent has collected order_id and a complete complaint description.
     # Hand off to CustomerServiceHandler for the full resolution cascade.
+
     message = ServiceRequestMessage(
         message_id=str(uuid.uuid4()),
         customer_id=CUSTOMER_ID,
-        order_id=intake_result.order_id,
-        message=intake_result.message,
+        order_id="ORD-1001",
+        message="Customers package came partially opened and all products inside are WET. customer is requesting a refund",
         triggered_by="intake_agent",
         timestamp=datetime.now().isoformat(),
     )
+
     print(message.model_dump())
 
     result = await handler.handle(message)
-    #print(json.dumps(result, indent=2))
+    print(json.dumps(result, indent=2))
 
 
 asyncio.run(main())

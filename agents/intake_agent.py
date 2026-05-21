@@ -63,7 +63,8 @@ class IntakeAgent:
         """
 
     async def collect(self, user_input: str, customer_id: str) -> IntakeResult:
-        """Process one customer turn. Returns IntakeResult.
+        """
+        Process one customer turn. Returns IntakeResult.
 
         Call repeatedly until result.ready is True, then hand off to
         CustomerServiceHandler using result.order_id and result.message.

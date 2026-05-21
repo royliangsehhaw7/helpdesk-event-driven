@@ -119,12 +119,12 @@ The `MessageHub` is a dictionary and an `asyncio.gather()` call. Nothing more.
 ```python
 # State of the hub after all subscribe() calls:
 {
-    ServiceRequestMessage: [purchase_handler, profile_handler, complaint_handler, sentiment_handler],
-    PurchaseResultMessage:       [refund_handler],
-    ComplaintResultMessage:      [refund_handler],
-    ProfileResultMessage:        [resolution_handler],
-    RefundResultMessage:         [resolution_handler],
-    ResolutionResultMessage:     [composer_handler],
+    ServiceRequestMessage:      [purchase_handler, profile_handler, complaint_handler, sentiment_handler],
+    PurchaseResultMessage:      [refund_handler],
+    ComplaintResultMessage:     [refund_handler],
+    ProfileResultMessage:       [resolution_handler],
+    RefundResultMessage:        [resolution_handler],
+    ResolutionResultMessage:    [composer_handler],
 }
 
 # publish() does exactly this:
@@ -207,7 +207,7 @@ There are eight agents in total. One handles intake. Seven handle resolution.
 | SentimentAgent | `ServiceRequestMessage` | updates `board.profile.sentiment_*` in place | — |
 | RefundAgent | `PurchaseResultMessage` + `ComplaintResultMessage` | `board.refund` (`RefundOutput`) | RefundResultMessage |
 | ResolutionAgent | `RefundResultMessage` + `ProfileResultMessage` | `board.resolution` (`ResolutionOutput`) | ResolutionResultMessage |
-| `ResponseComposerAgent` | `ResolutionResultMessage` | `board.response` (`ResponseOutput`) | — |
+| ResponseComposerAgent | `ResolutionResultMessage` | `board.response` (`ResponseOutput`) | — |
 
 `RefundAgent` is pure Python — no LLM, no tools. It applies policy rules directly
 against `deps.board`.
@@ -1452,10 +1452,6 @@ class BaseAgent(ABC):
     def name(self) -> str:
         return self._name
 
-    def reset(self) -> None:
-        """Called before each request's subscribe loop. No-op by default."""
-        pass
-
     @abstractmethod
     def subscribe(self, hub: MessageHub, deps: Deps) -> None: ...
 
@@ -1580,7 +1576,6 @@ class IntakeAgent:
 ```python
 from datetime import datetime
 from agents.base_agent import BaseAgent
-from core.message_hub import MessageHub
 from core.deps import Deps
 from schemas.messages.service_request_message import ServiceRequestMessage
 from schemas.messages.purchase_message import PurchaseResultMessage
@@ -1588,11 +1583,6 @@ from schemas.outputs.purchase_output import PurchaseOutput
 
 
 class PurchaseAgent(BaseAgent):
-
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        async def handler(message):
-            await self.handle(message, deps)
-        hub.subscribe(ServiceRequestMessage, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1646,7 +1636,6 @@ class PurchaseAgent(BaseAgent):
 ```python
 from datetime import datetime
 from agents.base_agent import BaseAgent
-from core.message_hub import MessageHub
 from core.deps import Deps
 from schemas.messages.service_request_message import ServiceRequestMessage
 from schemas.messages.profile_message import ProfileResultMessage
@@ -1654,11 +1643,6 @@ from schemas.outputs.profile_output import ProfileOutput
 
 
 class ProfileAgent(BaseAgent):
-
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        async def handler(message):
-            await self.handle(message, deps)
-        hub.subscribe(ServiceRequestMessage, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1712,7 +1696,6 @@ class ProfileAgent(BaseAgent):
 ```python
 from datetime import datetime
 from agents.base_agent import BaseAgent
-from core.message_hub import MessageHub
 from core.deps import Deps
 from schemas.messages.service_request_message import ServiceRequestMessage
 from schemas.messages.complaint_message import ComplaintResultMessage
@@ -1720,12 +1703,6 @@ from schemas.outputs.complaint_output import ComplaintOutput
 
 
 class ComplaintAgent(BaseAgent):
-
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        async def handler(message):
-            await self.handle(message, deps)
-            
-        hub.subscribe(ServiceRequestMessage, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1775,23 +1752,12 @@ class ComplaintAgent(BaseAgent):
 - **Tools**: `log_decision` only
 
 ```python
+from agents.base_agent import BaseAgent
+from core.deps import Deps
+from schemas.messages.service_request_message import ServiceRequestMessage
+from schemas.messages.profile_message import ProfileResultMessage
+
 class SentimentAgent(BaseAgent):
-
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        self._pending_score = None
-        self._pending_label = None
-
-        async def on_message(message):
-            await self.handle(message, deps)
-
-        async def on_profile(message):
-            # if sentiment finished before profile was posted, apply now
-            if self._pending_score is not None:
-                deps.board.profile.sentiment_score = self._pending_score
-                deps.board.profile.sentiment_label = self._pending_label
-
-        hub.subscribe(ServiceRequestMessage, on_message)
-        hub.subscribe(ProfileResultMessage, on_profile)
 
     def get_instruction(self) -> str:
         return """
@@ -1825,9 +1791,19 @@ class SentimentAgent(BaseAgent):
             deps.board.profile.sentiment_score = score["sentiment_score"]
             deps.board.profile.sentiment_label = score["sentiment_label"]
         else:
-            # profile not yet posted — hold until on_profile fires
             self._pending_score = score["sentiment_score"]
             self._pending_label = score["sentiment_label"]
+
+    async def handle_profile(self, message: ProfileResultMessage, deps: Deps) -> None:
+        """
+        Called when ProfileResultMessage arrives. Applies pending sentiment if
+        SentimentAgent finished before ProfileAgent posted to the board.
+        """
+        if hasattr(self, "_pending_score") and self._pending_score is not None:
+            deps.board.profile.sentiment_score = self._pending_score
+            deps.board.profile.sentiment_label = self._pending_label
+            self._pending_score = None
+            self._pending_label = None
 ```
 
 ### 9.8 RefundAgent
@@ -1850,24 +1826,14 @@ required.
 ```python
 from datetime import datetime
 from agents.base_agent import BaseAgent
-from core.message_hub import MessageHub
 from core.deps import Deps
-from schemas.messages.purchase_message import PurchaseResultMessage
-from schemas.messages.complaint_message import ComplaintResultMessage
 from schemas.messages.refund_message import RefundResultMessage
 from schemas.outputs.refund_output import RefundOutput
-
 
 class RefundAgent(BaseAgent):
 
     def __init__(self, name: str):
         super().__init__(name, agent=None)
-
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        async def handler(message):
-            await self.handle(message, deps)
-        hub.subscribe(PurchaseResultMessage, handler)
-        hub.subscribe(ComplaintResultMessage, handler)
 
     def get_instruction(self) -> str:
         return ""
@@ -1876,7 +1842,6 @@ class RefundAgent(BaseAgent):
         if deps.board.purchase is None or deps.board.complaint is None:
             return  # one dependency not yet on board — exit silently
 
-        # both dependencies present — proceed
         finding = self._check(
             deps.board.purchase,
             deps.board.complaint,
@@ -1936,21 +1901,11 @@ required.
 import json
 from datetime import datetime
 from agents.base_agent import BaseAgent
-from core.message_hub import MessageHub
 from core.deps import Deps
-from schemas.messages.refund_message import RefundResultMessage
-from schemas.messages.profile_message import ProfileResultMessage
 from schemas.messages.resolution_message import ResolutionResultMessage
 from schemas.outputs.resolution_output import ResolutionOutput
 
-
 class ResolutionAgent(BaseAgent):
-
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        async def handler(message):
-            await self.handle(message, deps)
-        hub.subscribe(RefundResultMessage, handler)
-        hub.subscribe(ProfileResultMessage, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -1978,7 +1933,6 @@ class ResolutionAgent(BaseAgent):
                 or deps.board.complaint is None):
             return  # not all dependencies on board yet — exit silently
 
-        # all dependencies present — proceed
         context = json.dumps({
             "purchase":   deps.board.purchase.model_dump()  if deps.board.purchase  else {},
             "profile":    deps.board.profile.model_dump(),
@@ -2022,18 +1976,11 @@ It is called exactly once per request. No gate condition is needed.
 ```python
 import json
 from agents.base_agent import BaseAgent
-from core.message_hub import MessageHub
 from core.deps import Deps
 from schemas.messages.resolution_message import ResolutionResultMessage
 from schemas.outputs.response_output import ResponseOutput
 
-
 class ResponseComposerAgent(BaseAgent):
-
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        async def handler(message):
-            await self.handle(message, deps)
-        hub.subscribe(ResolutionResultMessage, handler)
 
     def get_instruction(self) -> str:
         return """
@@ -2215,31 +2162,64 @@ class CustomerServiceHandler:
         """Handle one customer message. Returns a result dict.
 
         Creates a fresh MessageHub, Blackboard, and Deps for this request.
-        Subscribes all agents to the hub, then fires the single publish() call
-        that triggers the entire agent cascade.
+        Wires all agents to the hub via handler closures — agents have no knowledge
+        of the hub. Fires the single publish() call that triggers the entire cascade.
         """
         hub   = MessageHub()
         board = Blackboard()
-        repo = FacadeRepos()
-
-        policy_repo = PolicyRepository()
-        policy = await policy_repo.get_policy()
-
         deps  = Deps(
+            repo=self._repo,
             hub=hub,
-            repos=repo,
             board=board,
             policy=self._policy,
-
             message_id=message.message_id,
             customer_id=message.customer_id,
             order_id=message.order_id,
-
             total_tokens=0,
         )
 
-        for agent in self._agents:
-            agent.subscribe(hub, deps)
+        # Wire agents to the hub. Each closure captures deps and delegates to the
+        # agent's handle() method. Agents never see the hub — all wiring is here.
+        purchase_agent, profile_agent, complaint_agent, sentiment_agent, \
+        refund_agent, resolution_agent, composer_agent = self._agents
+
+        async def on_service_request(msg):
+            await purchase_agent.handle(msg, deps)
+
+        async def on_service_request_profile(msg):
+            await profile_agent.handle(msg, deps)
+
+        async def on_service_request_complaint(msg):
+            await complaint_agent.handle(msg, deps)
+
+        async def on_service_request_sentiment(msg):
+            await sentiment_agent.handle(msg, deps)
+
+        async def on_purchase_result(msg):
+            await refund_agent.handle(msg, deps)
+
+        async def on_complaint_result(msg):
+            await refund_agent.handle(msg, deps)
+
+        async def on_profile_result(msg):
+            await sentiment_agent.handle_profile(msg, deps)
+            await resolution_agent.handle(msg, deps)
+
+        async def on_refund_result(msg):
+            await resolution_agent.handle(msg, deps)
+
+        async def on_resolution_result(msg):
+            await composer_agent.handle(msg, deps)
+
+        hub.subscribe(ServiceRequestMessage,  on_service_request)
+        hub.subscribe(ServiceRequestMessage,  on_service_request_profile)
+        hub.subscribe(ServiceRequestMessage,  on_service_request_complaint)
+        hub.subscribe(ServiceRequestMessage,  on_service_request_sentiment)
+        hub.subscribe(PurchaseResultMessage,  on_purchase_result)
+        hub.subscribe(ComplaintResultMessage, on_complaint_result)
+        hub.subscribe(ProfileResultMessage,   on_profile_result)
+        hub.subscribe(RefundResultMessage,    on_refund_result)
+        hub.subscribe(ResolutionResultMessage, on_resolution_result)
 
         logger.info(f"[{message.message_id}] cascade start")
         await hub.publish(message)

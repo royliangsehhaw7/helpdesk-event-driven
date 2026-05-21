@@ -1,8 +1,7 @@
-import asyncio
-from collections import defaultdict
-from typing import Callable
-from pydantic import BaseModel
-
+# import asyncio
+# from collections import defaultdict
+# from typing import Callable
+# from pydantic import BaseModel
 
 # class Dispatcher:
 #     """Pure Observer fan-out. Zero domain knowledge.
@@ -28,52 +27,29 @@ from pydantic import BaseModel
 
 # ===== imperative version
 import asyncio
+from pydantic import BaseModel
+from typing import Callable, Any
+from collections import defaultdict
 
+from schemas.agent_param import AgentParam
 
 class MessageHub:
     def __init__(self):
-        # A plain, standard dictionary.
-        # Key: A Python class type (e.g., UserRegisteredEvent)
-        # Value: A list containing function objects
-        self._subscribers = {}
+        # Maps event message types directly to the raw agent handle methods
+        self._subscribers: dict[type, list[Callable]] = defaultdict(list)
 
-    def subscribe(self, contract_type, handler):
-        # Check if this event type is already a key in our dictionary
-        if contract_type not in self._subscribers:
-            # If it's not there, create an empty list for it
-            self._subscribers[contract_type] = []
-        
-        # Grab the list for this event type and append the function to it
-        self._subscribers[contract_type].append(handler)
+    def subscribe(self, message_type: type, handler: Callable) -> None:
+        """Register an agent method directly."""
+        self._subscribers[message_type].append(handler)
 
-    async def publish(self, contract):
-        # Get the actual class type of the incoming object
-        # Equivalent to event.GetType() in C#
-        contract_type = type(contract)
-        
-        # Look up the list of subscriber functions for this specific type
-        # If no one subscribed, default to an empty list []
-        handlers = self._subscribers.get(contract_type, [])
-        
-        # If the list is empty, there is nothing to do. Exit early.
+    async def publish(self, message: BaseModel, deps: Any) -> None:
+        """Broadcast event to subscribers, automatically packaging data into AgentParam."""
+        handlers = self._subscribers.get(type(message), [])
         if not handlers:
             return
 
-        # Build a list to hold our unstarted tasks (like cold C# Tasks)
-        tasks_to_run = []
+        # Automatically package the message and request deps for every handler
+        param = AgentParam(message=message, deps=deps)
         
-        # Loop through every subscriber function one by one
-        for handler in handlers:
-            # Call the async function passing the event data.
-            # Crucial: This does NOT execute the function yet!
-            # It just creates a "coroutine" object (an unstarted task).
-            coroutine_task = handler(contract)
-            
-            # Put that unstarted task into our tracking list
-            tasks_to_run.append(coroutine_task)
-
-        # Hand the entire list of tasks to the asyncio engine.
-        # Equivalent to: await Task.WhenAll(tasks_to_run)
-        # This is where the single thread begins executing them.
-        await asyncio.gather(*tasks_to_run)
-        
+        # Fire all agents concurrently via the native event loop
+        await asyncio.gather(*[handler(param) for handler in handlers])

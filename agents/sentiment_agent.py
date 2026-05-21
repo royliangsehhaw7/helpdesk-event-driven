@@ -1,28 +1,9 @@
 
 from agents.base_agent import BaseAgent
-from core.message_hub import MessageHub
-from core.deps import Deps
-
+from schemas.agent_param import AgentParam
 from schemas.messages import ServiceRequestMessage, ProfileResultMessage
 
 class SentimentAgent(BaseAgent):
-
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        self._pending_score = None
-        self._pending_label = None
-
-        async def on_message(message):
-            await self.handle(message, deps)
-
-        async def on_profile(message):
-            # if sentiment finished before profile was posted, apply now
-            if self._pending_score is not None:
-                deps.board.profile.sentiment_score = self._pending_score
-                deps.board.profile.sentiment_label = self._pending_label
-
-        hub.subscribe(ServiceRequestMessage, on_message)
-        hub.subscribe(ProfileResultMessage, on_profile)
-
     def get_instruction(self) -> str:
         return """
             You are the SentimentAgent.
@@ -44,16 +25,16 @@ class SentimentAgent(BaseAgent):
             Return {"sentiment_score": float, "sentiment_label": str}.
         """
 
-    async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
+    async def handle(self, param: AgentParam) -> None:
         result = await self._agent.run(
-            f"Score the sentiment of this message: {message.message}",
-            deps=deps,
+            f"Score the sentiment of this message: {param.message.message}",
+            deps=param.deps,
             instructions=self.get_instruction(),
         )
         score = result.output
-        if deps.board.profile is not None:
-            deps.board.profile.sentiment_score = score["sentiment_score"]
-            deps.board.profile.sentiment_label = score["sentiment_label"]
+        if param.deps.board.profile is not None:
+            param.deps.board.profile.sentiment_score = score["sentiment_score"]
+            param.deps.board.profile.sentiment_label = score["sentiment_label"]
         else:
             # profile not yet posted — hold until on_profile fires
             self._pending_score = score["sentiment_score"]

@@ -101,3 +101,291 @@
 2026-05-20 12:58:04,311 [INFO] [intake] customer=C001 input='my order is ORD-1001 and i would like a refund...'
 2026-05-20 12:58:09,130 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
 2026-05-20 12:58:09,142 [INFO] [intake] ready=True order_id=ORD-1001
+2026-05-21 10:30:46,233 [INFO] [intake] customer=C001 input='i have some problem with my order ORD-1001...'
+2026-05-21 10:30:54,842 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:30:55,041 [INFO] [intake] ready=False order_id=ORD-1001
+2026-05-21 10:31:13,187 [INFO] [intake] customer=C001 input='the package came partially opened and the products are wet...'
+2026-05-21 10:31:23,520 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:31:28,411 [INFO] [intake] ready=False order_id=ORD-1001
+2026-05-21 10:31:32,726 [INFO] [intake] customer=C001 input='all of them...'
+2026-05-21 10:31:43,013 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:31:48,037 [INFO] [intake] ready=False order_id=ORD-1001
+2026-05-21 10:31:52,859 [INFO] [intake] customer=C001 input='i want a refund...'
+2026-05-21 10:32:03,131 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:32:03,141 [INFO] [intake] ready=False order_id=ORD-1001
+2026-05-21 10:33:16,020 [INFO] [intake] customer=C001 input='my package came partially opened and ALL the products INSIDE...'
+2026-05-21 10:33:25,887 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:33:26,078 [INFO] [intake] ready=False order_id=
+2026-05-21 10:33:35,105 [INFO] [intake] customer=C001 input='ORD-1001...'
+2026-05-21 10:33:45,542 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:34:10,037 [INFO] [intake] ready=False order_id=
+2026-05-21 10:34:12,682 [INFO] [intake] customer=C001 input='refund...'
+2026-05-21 10:34:23,069 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:34:24,160 [INFO] [intake] ready=True order_id=ORD-1001
+2026-05-21 10:42:05,166 [INFO] [intake] customer=C001 input='my package came partially opened and all product are wet. i ...'
+2026-05-21 10:42:17,988 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:42:24,637 [INFO] [intake] ready=False order_id=
+2026-05-21 10:42:29,904 [INFO] [intake] customer=C001 input='ORD-1001...'
+2026-05-21 10:42:40,236 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:42:45,544 [INFO] [intake] ready=False order_id=ORD-1001
+2026-05-21 10:42:47,451 [INFO] [intake] customer=C001 input='refund...'
+2026-05-21 10:42:57,739 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:43:21,325 [INFO] [intake] ready=True order_id=ORD-1001
+2026-05-21 10:56:20,080 [INFO] [intake] customer=C001 input='my package came partially opened and all the products are WE...'
+2026-05-21 10:56:33,643 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:56:35,878 [INFO] [intake] ready=False order_id=
+2026-05-21 10:56:40,532 [INFO] [intake] customer=C001 input='ORD-1001...'
+2026-05-21 10:56:48,041 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:56:48,065 [INFO] [intake] ready=False order_id=
+2026-05-21 10:56:50,787 [INFO] [intake] customer=C001 input='refund...'
+2026-05-21 10:56:58,037 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 10:56:58,053 [INFO] [intake] ready=True order_id=ORD-1001
+2026-05-21 12:17:47,992 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:21:28,952 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:21:33,125 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:29:23,416 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:30:35,367 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:30:37,620 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:38:30,340 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:38:31,824 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:40:16,559 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:40:17,460 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:40:19,501 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:40:27,068 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:40:28,044 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:47:21,295 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:47:24,914 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:47:26,029 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:47:30,249 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:47:54,865 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:47:54,873 [ERROR] unhandled exception during asyncio.run() shutdown
+task: <Task finished name='pydantic_graph.beta.graph._GraphIterator._run_tracked_task' coro=<_GraphIterator._run_tracked_task() done, defined at c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_graph\beta\graph.py:798> exception=ClosedResourceError()>
+Traceback (most recent call last):
+  File "C:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\agents\profile_agent.py", line 46, in handle
+    result = await self._agent.run(
+             ^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_ai\agent\abstract.py", line 354, in run
+    async with self.iter(
+               ~~~~~~~~~^
+        user_prompt=user_prompt,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<14 lines>...
+        spec=spec,
+        ^^^^^^^^^^
+    ) as agent_run:
+    ^
+  File "C:\Python313\Lib\contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_ai\agent\__init__.py", line 1457, in iter
+    async with AsyncExitStack() as stack:
+               ~~~~~~~~~~~~~~^^
+  File "C:\Python313\Lib\contextlib.py", line 768, in __aexit__
+    raise exc
+  File "C:\Python313\Lib\contextlib.py", line 751, in __aexit__
+    cb_suppress = await cb(*exc_details)
+                  ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_graph\beta\graph.py", line 283, in iter
+    async with GraphRun[StateT, DepsT, OutputT](
+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        graph=self,
+        ^^^^^^^^^^^
+    ...<3 lines>...
+        traceparent=traceparent,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ) as graph_run:
+    ^
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_graph\beta\graph.py", line 436, in __aexit__
+    await self._async_exit_stack.__aexit__(exc_type, exc_val, exc_tb)
+  File "C:\Python313\Lib\contextlib.py", line 768, in __aexit__
+    raise exc
+  File "C:\Python313\Lib\contextlib.py", line 749, in __aexit__
+    cb_suppress = cb(*exc_details)
+  File "C:\Python313\Lib\contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_graph\beta\graph.py", line 1043, in _unwrap_exception_groups
+    raise exception
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_graph\beta\graph.py", line 808, in _run_tracked_task
+    await self.iter_stream_sender.send(_GraphTaskResult(t_, [], error=exc))
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\anyio\streams\memory.py", line 249, in send
+    self.send_nowait(item)
+    ~~~~~~~~~~~~~~~~^^^^^^
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\anyio\streams\memory.py", line 218, in send_nowait
+    raise ClosedResourceError
+anyio.ClosedResourceError
+2026-05-21 12:47:54,896 [ERROR] unhandled exception during asyncio.run() shutdown
+task: <Task finished name='Task-4' coro=<ProfileAgent.handle() done, defined at C:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\agents\profile_agent.py:45> exception=ClosedResourceError()>
+Traceback (most recent call last):
+  File "C:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\agents\profile_agent.py", line 46, in handle
+    result = await self._agent.run(
+             ^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_ai\agent\abstract.py", line 354, in run
+    async with self.iter(
+               ~~~~~~~~~^
+        user_prompt=user_prompt,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<14 lines>...
+        spec=spec,
+        ^^^^^^^^^^
+    ) as agent_run:
+    ^
+  File "C:\Python313\Lib\contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_ai\agent\__init__.py", line 1457, in iter
+    async with AsyncExitStack() as stack:
+               ~~~~~~~~~~~~~~^^
+  File "C:\Python313\Lib\contextlib.py", line 768, in __aexit__
+    raise exc
+  File "C:\Python313\Lib\contextlib.py", line 751, in __aexit__
+    cb_suppress = await cb(*exc_details)
+                  ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_graph\beta\graph.py", line 283, in iter
+    async with GraphRun[StateT, DepsT, OutputT](
+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        graph=self,
+        ^^^^^^^^^^^
+    ...<3 lines>...
+        traceparent=traceparent,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ) as graph_run:
+    ^
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_graph\beta\graph.py", line 436, in __aexit__
+    await self._async_exit_stack.__aexit__(exc_type, exc_val, exc_tb)
+  File "C:\Python313\Lib\contextlib.py", line 768, in __aexit__
+    raise exc
+  File "C:\Python313\Lib\contextlib.py", line 749, in __aexit__
+    cb_suppress = cb(*exc_details)
+  File "C:\Python313\Lib\contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_graph\beta\graph.py", line 1043, in _unwrap_exception_groups
+    raise exception
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\pydantic_graph\beta\graph.py", line 808, in _run_tracked_task
+    await self.iter_stream_sender.send(_GraphTaskResult(t_, [], error=exc))
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\anyio\streams\memory.py", line 249, in send
+    self.send_nowait(item)
+    ~~~~~~~~~~~~~~~~^^^^^^
+  File "c:\Development\python\pydantic-ai\multi-agent\helpdesk-event-driven\venv\Lib\site-packages\anyio\streams\memory.py", line 218, in send_nowait
+    raise ClosedResourceError
+anyio.ClosedResourceError
+2026-05-21 12:52:48,662 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:52:49,531 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:52:52,116 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:52:54,565 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:52:59,158 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:53:03,472 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:53:03,481 [INFO] [decision] Order ORD-1001 found for customer C001. Status is delivered, order date 2026-04-10, 41 days since purchase. Order contains 1 Wireless Ergonomic Keyboard (electronics) total $149.90. Purchase claim verified. | tokens: request=4333 response=471 total=4804
+2026-05-21 12:53:06,116 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 12:53:57,223 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:03:12,923 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:03:17,587 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:03:20,382 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:03:22,915 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:03:25,313 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:03:28,088 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:03:32,464 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:11:05,502 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:39:14,498 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:39:15,771 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:39:17,871 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:39:20,255 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:39:25,245 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:40:14,742 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:40:25,296 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:40:29,898 [INFO] [decision] Retrieved customer profile: tier premium, total_orders 1, previous_complaints 1. Recent complaint history shows one delivery-type complaint (CMP-001) for a refunded order. Current message describes a partially opened, wet package requesting refund, which aligns with delivery/type issue. Therefore is_repeat_issue = true. Sentiment initialized to 0.0 neutral. | tokens: request=3087 response=554 total=3641
+2026-05-21 13:40:32,937 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:47:33,472 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:47:36,024 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:47:39,714 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:47:39,884 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:47:47,248 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:47:49,422 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:47:50,029 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:47:55,003 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:48:04,753 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:48:04,781 [INFO] [decision] Customer C001 is premium tier with 1 total order. They have 1 previous complaint of type 'delivery' (refunded). Current complaint about wet/damaged package is also a delivery issue, indicating a repeat issue. Sentiment fields initialized to neutral. | tokens: request=5294 response=820 total=6114
+2026-05-21 13:48:10,784 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:49:58,392 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:50:04,024 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:50:07,856 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:50:10,914 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:50:13,951 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:50:21,220 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:50:24,261 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:52:27,869 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:52:30,347 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:52:30,785 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:52:33,412 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:52:39,494 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:52:51,368 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:52:57,457 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:52:57,466 [INFO] [decision] Customer C001 is premium tier, total orders 1, previous complaints 1. Recent complaint type was 'delivery' (package damaged). Current complaint about wet products due to partially opened package also falls under delivery issue. Hence is_repeat_issue = true. Sentiment initialized to 0.0 neutral. | tokens: request=3087 response=559 total=3646
+2026-05-21 13:53:07,770 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:54:14,620 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:54:16,474 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:54:16,988 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:54:19,801 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:54:23,897 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:54:25,425 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:54:30,266 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:54:30,273 [INFO] [decision] Customer C001 is premium tier with 1 total order. They have 1 previous complaint of type 'delivery' (refunded). Current complaint about wet/damaged package is also a delivery issue, so is_repeat_issue = true. Sentiment initialized to neutral. | tokens: request=4149 response=522 total=4671
+2026-05-21 13:54:31,307 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:55:20,349 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:55:58,330 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:56:08,812 [INFO] [decision] Refund not eligible due to 41 days >30 day window. Replacement eligible because product category electronics is in replacement_eligible_categories. No severity or customer request indicated for complaint_filing. Previous complaints (1) below escalation threshold (3) and severity not high, so escalation not warranted. Therefore options: replacement; recommended: replacement; escalate_to_human: false. | tokens: request=931 response=481 total=1412
+2026-05-21 13:56:13,257 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:59:55,553 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 13:59:55,689 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:00:02,901 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:00:06,233 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:00:07,699 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:00:18,028 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:00:32,559 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:00:34,242 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:01:12,909 [INFO] [decision] Customer C001 is premium tier with 1 total order. They have 1 previous complaint of type 'delivery' (refunded). Current message describes a partially opened, wet package requesting refund, which aligns with a delivery/damage issue. Therefore, this is a repeat issue (same complaint type). Sentiment initialized as neutral. | tokens: request=5294 response=753 total=6047
+2026-05-21 14:01:23,445 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:01:43,262 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:01:50,435 [INFO] [decision] Refund not eligible due to purchase age >30 days. Replacement eligible because product category electronics is in replacement_eligible_categories. No complaint filing requested and severity not indicated as high. Previous complaints (1) below escalation threshold (3) and severity not high, so escalation not warranted. Therefore only replacement option available. | tokens: request=931 response=462 total=1393
+2026-05-21 14:01:57,574 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:05:21,789 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:05:24,892 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:05:27,670 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:05:29,337 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:05:35,211 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:05:39,650 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:05:40,753 [INFO] [decision] Order ORD-1001 found for customer C001. Status is delivered, order date 2026-04-10, 41 days since purchase. Product: Wireless Ergonomic Keyboard (electronics). Order total $149.90. Purchase verified. | tokens: request=4333 response=428 total=4761
+2026-05-21 14:05:46,495 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:05:47,603 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:05:59,927 [INFO] [decision] Customer profile shows tier premium, total_orders 1, previous_complaints 1. Recent complaint was of type 'delivery' (refunded). Current complaint describes package partially opened and products wet, which is also a delivery issue. Therefore is_repeat_issue is true. Sentiment initialized to neutral 0.0. | tokens: request=3087 response=503 total=3590
+2026-05-21 14:06:07,390 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:06:17,703 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:06:41,047 [INFO] [decision] Refund not eligible due to purchase being 41 days old (outside 30-day window). Product category electronics is in replacement-eligible categories, so replacement is an option. No evidence of customer requesting complaint filing or severity being high, so complaint_filing not added. Previous complaints (1) below escalation threshold (3) and no high severity indicated, so escalation not added. Therefore only replacement is available. | tokens: request=931 response=556 total=1487
+2026-05-21 14:06:54,520 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:20:20,933 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:20:22,572 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:20:26,382 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:20:29,882 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:20:30,863 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:20:40,201 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:20:41,121 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:20:57,599 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:21:05,364 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:21:05,384 [INFO] [decision] Order ORD-1001 found for customer C001. Status is delivered, order date 2026-04-10, 41 days since purchase. Product: Wireless Ergonomic Keyboard (electronics). Order total $149.90. Purchase verified. | tokens: request=4333 response=489 total=4822
+2026-05-21 14:21:15,685 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:21:44,913 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:22:06,898 [INFO] [decision] Refund not eligible due to purchase being 41 days old (outside 30-day window). Product category 'electronics' is in replacement-eligible categories, so replacement is an option. No indication of high severity or explicit customer request for complaint filing, so complaint_filing not added. Previous complaints (1) below escalation threshold (3) and no high severity indicated, so escalation not warranted. Therefore only replacement is available. | tokens: request=931 response=646 total=1577
+2026-05-21 14:22:15,469 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:22:51,942 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:23:02,243 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-21 14:23:02,253 [INFO] [decision] Customer Aisha Rahman (premium tier) has a neutral sentiment. Purchase 41 days old, refund ineligible per 30-day policy. Resolution recommends replacement. Will compose response acknowledging issue, explaining refund policy, offering replacement, and noting no escalation needed. | tokens: request=1921 response=410 total=2331
+2026-05-21 14:23:11,238 [INFO] HTTP Request: POST https://openrouter.ai/api/v1/chat/completions "HTTP/1.1 200 OK"

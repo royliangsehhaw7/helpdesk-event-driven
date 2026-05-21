@@ -1,20 +1,23 @@
 from datetime import datetime
+from pydantic_ai import Agent
 
 from agents.base_agent import BaseAgent
-from core.message_hub import MessageHub
-from core.deps import Deps
 
+from schemas.agent_param import AgentParam
 from schemas.outputs.complaint_output import ComplaintOutput
 from schemas.messages import ServiceRequestMessage, ComplaintResultMessage 
 
 
 class ComplaintAgent(BaseAgent):
-
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        async def handler(message):
-            await self.handle(message, deps)
-        hub.subscribe(ServiceRequestMessage, handler)
-
+    def __init__(self, name: str, agent: Agent):
+        # 1. Run the BaseAgent constructor to assign self._name and self._agent
+        super().__init__(name=name, agent=agent)
+        
+        # 2. Intercept the newly assigned self._agent and register the instructions
+        @self._agent.system_prompt
+        def assign_system_instructions(ctx) -> str:
+            return self.get_instruction()
+    
     def get_instruction(self) -> str:
         return """
             You are the ComplaintAgent.
@@ -38,16 +41,16 @@ class ComplaintAgent(BaseAgent):
             Call log_decision once. Return a ComplaintOutput.
         """
 
-    async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
+    async def handle(self, param: AgentParam) -> None:
         result = await self._agent.run(
-            f"Classify this complaint: {message.message}",
-            deps=deps,
-            instructions=self.get_instruction(),
+            f"Classify this complaint: {param.message.message}",
+            deps=param.deps
         )
         finding: ComplaintOutput = result.output
-        deps.board.complaint = finding
+        param.deps.board.complaint = finding
 
-        await deps.hub.publish(ComplaintResultMessage(
+        await param.deps.hub.publish(ComplaintResultMessage(
             triggered_by="complaint_agent",
             timestamp=datetime.now().isoformat(),
-        ))
+        ),
+        deps = param.deps)

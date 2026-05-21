@@ -20,8 +20,8 @@ class Blackboard:
 
     purchase:           PurchaseOutput   | None = None
     profile:            ProfileOutput    | None = None
-    complaint_type:     ComplaintOutput  | None = None
-    refund_eligibility: RefundOutput     | None = None
+    complaint :         ComplaintOutput  | None = None
+    refund:             RefundOutput     | None = None
     resolution:         ResolutionOutput | None = None
     response:           ResponseOutput   | None = None
 

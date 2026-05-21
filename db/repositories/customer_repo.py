@@ -4,7 +4,7 @@ from db.connection import Database
 
 @dataclass
 class CustomerRepository:
-    async def get(self, id: str) -> dict | None:
+    async def get_by_id(self, id: str) -> dict | None:
         pool = await Database.get_pool()
         
         # 2. Explicitly acquire a connection
@@ -15,7 +15,7 @@ class CustomerRepository:
                     select 
                         * 
                     from customers 
-                    whwew id=%s
+                    where id=%s
                 """
                 await cur.execute(sql, (id,))                
 

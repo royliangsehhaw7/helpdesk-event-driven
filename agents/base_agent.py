@@ -15,9 +15,5 @@ class BaseAgent(ABC):
         return self._name
 
     @abstractmethod
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None: 
-        ...
-
-    @abstractmethod
     def get_instruction(self) -> str: 
         ...

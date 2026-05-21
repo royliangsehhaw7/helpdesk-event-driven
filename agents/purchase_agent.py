@@ -1,19 +1,22 @@
 from datetime import datetime
 
+from pydantic_ai import Agent
 from agents.base_agent import BaseAgent
-from core.message_hub import MessageHub
-from core.deps import Deps
 
+from schemas.agent_param import AgentParam
 from schemas.messages import ServiceRequestMessage, PurchaseResultMessage
 from schemas.outputs.purchase_output import PurchaseOutput
 
 
 class PurchaseAgent(BaseAgent):
-
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        async def handler(message):
-            await self.handle(message, deps)
-        hub.subscribe(ServiceRequestMessage, handler)
+    def __init__(self, name: str, agent: Agent):
+        # 1. Run the BaseAgent constructor to assign self._name and self._agent
+        super().__init__(name=name, agent=agent)
+        
+        # 2. Intercept the newly assigned self._agent and register the instructions
+        @self._agent.system_prompt
+        def assign_system_instructions(ctx) -> str:
+            return self.get_instruction()    
 
     def get_instruction(self) -> str:
         return """
@@ -37,20 +40,22 @@ class PurchaseAgent(BaseAgent):
             Call log_decision once. Return a PurchaseOutput.
         """
 
-    async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
+    async def handle(self, param: AgentParam) -> None:
         result = await self._agent.run(
-            f"Verify purchase for order {deps.order_id} "
-            f"by customer {deps.customer_id}. "
-            f"Customer message: {message.message}",
-            deps=deps,
-            instructions=self.get_instruction(),
+            f"""
+                Verify purchase for order {param.deps.order_id}
+                by customer {param.deps.customer_id}.
+                Customer message: {param.message.message}
+            """,
+            deps=param.deps,
         )
         # 1. write full rich output to blackboard
         finding: PurchaseOutput = result.output
-        deps.board.purchase = finding
+        param.deps.board.purchase = finding
 
         # 2. publish lean message to hub
-        await deps.hub.publish(PurchaseResultMessage(
+        await param.deps.hub.publish(PurchaseResultMessage(
             triggered_by="purchase_agent",
             timestamp=datetime.now().isoformat(),
-        ))
+        ),
+        deps = param.deps)

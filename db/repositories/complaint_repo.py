@@ -4,7 +4,7 @@ from db.connection import Database
 @dataclass
 class ComplaintRepository:
 
-    async def get_complaint_history(self, customer_id: str, limit: int = 10) -> dict | None:
+    async def get_history(self, customer_id: str, limit: int = 10) -> dict | None:
         pool = await Database.get_pool()
         
         async with pool.acquire() as conn:
@@ -22,17 +22,21 @@ class ComplaintRepository:
                 return await cur.fetchall()
            
 
-    async def get_complaint_count(self, customer_id: str) -> int:
+    async def get_count(self, customer_id: str) -> int:
         pool = await Database.get_pool()
 
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 sql = """
                     select 
-                        COUNT(*) FROM complaint_history 
+                        COUNT(*) as total_count FROM complaint_history 
                     where customer_id = %s
                 """
                 await cur.execute(sql, (customer_id,))
                 row = await cur.fetchone()
 
-                return int(row[0]) if row else 0
+                if not row:
+                    return 0
+                
+                # 2. Extract the string key natively from the dictionary
+                return int(row["total_count"])

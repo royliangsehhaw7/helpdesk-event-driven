@@ -117,7 +117,7 @@ class TestGetOrderSummary:
         ctx = make_ctx(order_id="ORD-9999", customer_id="C007")
         await get_order_summary(ctx)
 
-        ctx.deps.repo.order.get_order.assert_awaited_once_with("ORD-9999", "C007")
+        ctx.deps.repos.order.get_order.assert_awaited_once_with("ORD-9999", "C007")
 
     @pytest.mark.asyncio
     async def test_order_not_found_returns_error_dict(self):
@@ -172,7 +172,7 @@ class TestGetOrderLineItems:
     async def test_passes_order_id_to_repo(self):
         ctx = make_ctx(order_id="ORD-4242")
         await get_order_line_items(ctx)
-        ctx.deps.repo.order.get_details.assert_awaited_once_with("ORD-4242")
+        ctx.deps.repos.order.get_details.assert_awaited_once_with("ORD-4242")
 
     @pytest.mark.asyncio
     async def test_empty_order_returns_empty_list(self):
@@ -229,7 +229,7 @@ class TestGetOrderTotal:
     async def test_passes_order_id_to_repo(self):
         ctx = make_ctx(order_id="ORD-5555")
         await get_order_total(ctx)
-        ctx.deps.repo.order.get_total.assert_awaited_once_with("ORD-5555")
+        ctx.deps.repos.order.get_total.assert_awaited_once_with("ORD-5555")
 
 
 # ---------------------------------------------------------------------------
@@ -266,4 +266,4 @@ class TestGetCustomerOrderCount:
     async def test_passes_customer_id_to_repo(self):
         ctx = make_ctx(customer_id="C042")
         await get_customer_order_count(ctx)
-        ctx.deps.repo.order.get_customer_order_count.assert_awaited_once_with("C042")
+        ctx.deps.repos.order.get_customer_order_count.assert_awaited_once_with("C042")

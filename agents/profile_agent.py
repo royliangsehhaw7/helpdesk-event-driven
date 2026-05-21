@@ -1,20 +1,22 @@
 from datetime import datetime
+from pydantic_ai import Agent
 
 from agents.base_agent import BaseAgent
-from core.message_hub import MessageHub
-from core.deps import Deps
 
-from schemas.messages import ServiceRequestMessage, ProfileResultMessage
+from schemas.agent_param import AgentParam
 from schemas.outputs.profile_output import ProfileOutput
+from schemas.messages import ServiceRequestMessage, ProfileResultMessage
 
 
 class ProfileAgent(BaseAgent):
-
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None:
-        async def handler(message):
-            await self.handle(message, deps)
-            
-        hub.subscribe(ServiceRequestMessage, handler)
+    def __init__(self, name: str, agent: Agent):
+        # 1. Run the BaseAgent constructor to assign self._name and self._agent
+        super().__init__(name=name, agent=agent)
+        
+        # 2. Intercept the newly assigned self._agent and register the instructions
+        @self._agent.system_prompt
+        def assign_system_instructions(ctx) -> str:
+            return self.get_instruction()    
 
     def get_instruction(self) -> str:
         return """
@@ -40,19 +42,19 @@ class ProfileAgent(BaseAgent):
             Call log_decision once. Return a ProfileOutput.
         """
 
-    async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
+    async def handle(self, param: AgentParam) -> None:
         result = await self._agent.run(
             f"""
-                Build profile for customer {deps.customer_id}.
-                Message context: {message.message} 
+                Build profile for customer {param.deps.customer_id}.
+                Message context: {param.message.message} 
             """,
-            deps=deps,
-            instructions=self.get_instruction(),
+            deps=param.deps,
         )
         finding: ProfileOutput = result.output
-        deps.board.profile = finding
+        param.deps.board.profile = finding
 
-        await deps.hub.publish(ProfileResultMessage(
+        await param.deps.hub.publish(ProfileResultMessage(
             triggered_by="profile_agent",
             timestamp=datetime.now().isoformat(),
-        ))
+        ),
+        deps = param.deps)

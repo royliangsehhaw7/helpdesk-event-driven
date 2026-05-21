@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 
-from schemas.data.policy import Policy
 from .blackboard import Blackboard
 from .message_hub import MessageHub
+
+from schemas.data.policy import Policy
 from db.repositories.facade_repo import FacadeRepos
 
 @dataclass

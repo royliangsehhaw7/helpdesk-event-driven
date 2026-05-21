@@ -4,22 +4,39 @@ from pydantic_ai import Agent
 
 from db.repositories.facade_repo import FacadeRepos, PolicyRepository
 
-from core import Deps, LLMFactory, MessageHub, Blackboard, logger
-from agents import PurchaseAgent, ProfileAgent, ComplaintAgent, SentimentAgent
+from core import (
+    Deps, 
+    LLMFactory, 
+    MessageHub, 
+    Blackboard, 
+    logger
+)
+from agents import PurchaseAgent, ProfileAgent, RefundAgent, ResolutionAgent, ResponseComposerAgent
 
-from schemas.messages import ServiceRequestMessage
-from schemas.outputs import ProfileOutput, PurchaseOutput
+from schemas.messages import (
+    ServiceRequestMessage, 
+    PurchaseResultMessage, 
+    ProfileResultMessage, 
+    RefundResultMessage,
+    ResolutionResultMessage
+)
+from schemas.outputs import ProfileOutput, PurchaseOutput, ResolutionOutput, RefundOutput, ResponseOutput
+from schemas.data.policy import Policy
 
 from tools.agent_logger import log_decision
-from tools.customer_tools import get_customer_profile
+from tools.customer_tools import (
+    get_customer_profile
+)
 from tools.order_tools import (
     get_order_summary, 
     get_order_line_items,
     get_order_total, 
     get_customer_order_count,
 )
-from tools.complaint_tools import get_recent_complaints, get_complaint_count
-
+from tools.complaint_tools import (
+    get_recent_complaints, 
+    get_complaint_count
+)
 
 class CustomerServiceHandler:
     """
@@ -38,17 +55,17 @@ class CustomerServiceHandler:
         self._gmodel = factory.get_model(model="")
         # -- openrouter
         factory = LLMFactory("openrouter")
-        self._omodel = factory.get_model(model="")
+        self._omodel = factory.get_model(model="nvidia/nemotron-3-super-120b-a12b:free")
 
-        self._agents = self._build_agents()
-
+        agents_list = self._build_agents()
+        self._agents = {agent.name: agent for agent in agents_list}
 
     def _build_agents(self) -> list:
         """Construct all agents once. Agent instances are stateless across
         requests — all mutable state lives in Deps, which is per-request."""
         return [
             ProfileAgent(
-                name="customer_history",
+                name="profile_agent",
                 agent=Agent(
                     model=self._omodel, 
                     deps_type=Deps,
@@ -61,7 +78,7 @@ class CustomerServiceHandler:
                 ),
             ),
             PurchaseAgent(
-                name="purchase_verification",
+                name="purchase_agent",
                 agent=Agent(
                     model=self._omodel, 
                     deps_type=Deps,
@@ -72,6 +89,34 @@ class CustomerServiceHandler:
                            get_order_total],
                 ),
             ),
+            RefundAgent(
+                name="refund_agent",
+                agent=Agent(
+                    model=self._omodel, 
+                    deps_type=Deps,
+                    output_type=RefundOutput,
+                    tools=[log_decision],
+                ),
+            ),
+            ResolutionAgent(
+                name="resolution_agent",
+                agent=Agent(
+                    model=self._omodel, 
+                    deps_type=Deps,
+                    output_type=ResolutionOutput,
+                    tools=[log_decision],
+                ),
+            ),
+            ResponseComposerAgent(
+                name="response_agent",
+                agent=Agent(
+                    model=self._omodel, 
+                    deps_type=Deps,
+                    output_type=ResponseOutput,
+                    tools=[log_decision, get_customer_profile],
+                ),
+            ),
+
             # ComplaintAgent(
             #     name="complaint_agemt",
             #     agent=Agent(
@@ -90,30 +135,6 @@ class CustomerServiceHandler:
             #         tools=[log_decision],
             #     ),
             # ),
-            # RefundEligibilityAgent(
-            #     name="resolution",
-            #     agent=Agent(
-            #         model=make_model(PROVIDER), deps_type=Deps,
-            #         output_type=ResolutionResult,
-            #         tools=[log_decision],
-            #     ),
-            # ),
-            # ResolutionAgent(
-            #     name="resolution",
-            #     agent=Agent(
-            #         model=make_model(PROVIDER), deps_type=Deps,
-            #         output_type=ResolutionResult,
-            #         tools=[log_decision],
-            #     ),
-            # ),
-            # ResponseComposerAgent(
-            #     name="response_composer",
-            #     agent=Agent(
-            #         model=make_model(PROVIDER), deps_type=Deps,
-            #         output_type=CustomerResponse,
-            #         tools=[log_decision, get_customer_profile],
-            #     ),
-            # ),
         ]
 
     async def handle(self, service_request: ServiceRequestMessage) -> dict:
@@ -129,6 +150,7 @@ class CustomerServiceHandler:
 
         policy_repo = PolicyRepository()
         policy = await policy_repo.get_policy()
+        policy = Policy(**policy)
 
         deps  = Deps(
             hub=hub,
@@ -143,23 +165,41 @@ class CustomerServiceHandler:
             total_tokens=0,
         )
 
-        # Reset stateful agents and build the subscription dictionary.
-        # Each agent appends its handler to the list for its contract type.
-        # Nothing runs here — the hub is just wired up.
-        for agent in self._agents:
-            agent.reset()
-            agent.subscribe(hub, deps)
+        # =====================================================================
+        # 100% CLEAN, IMPERATIVE SUBSCRIPTIONS
+        # =====================================================================
+        # Pass the agent methods directly to the hub. No wrappers needed!
+        
+        # Phase 1: Direct triggers from the initial customer request
+        hub.subscribe(ServiceRequestMessage, self._agents["purchase_agent"].handle)
+        hub.subscribe(ServiceRequestMessage, self._agents["profile_agent"].handle)
+        # hub.subscribe(ServiceRequestMessage, self._agents["complaint_agent"].handle)
+        # hub.subscribe(ServiceRequestMessage, self._agents["sentiment_agent"].handle)
 
-        # Single publish call triggers the entire cascade.
-        # Does not return until deps.board.response is set.
-        logger.info(f"[{service_request.message_id}] cascade start")
-        await hub.publish(service_request)
-        logger.info(f"[{service_request.message_id}] cascade complete")
+        # Phase 2: Cascading downstream triggers
+        hub.subscribe(PurchaseResultMessage, self._agents["refund_agent"].handle)
+        hub.subscribe(ProfileResultMessage, self._agents["refund_agent"].handle)
 
-        response = deps.board.response
+        hub.subscribe(RefundResultMessage, self._agents["resolution_agent"].handle)
+        hub.subscribe(ResolutionResultMessage, self._agents["response_agent"].handle)
+
+        # hub.subscribe(ComplaintResultMessage, self._agents["refund_agent"].handle)
+        # hub.subscribe(RefundResultMessage,    self._agents["resolution_agent"].handle)
+
+        # =====================================================================
+        # THE CASCADE EXECUTION
+        # =====================================================================
+        # logger.info(f"[{message.message_id}] Cascading event chain started.")
+        
+        # # We pass both the message and deps to the hub to kick off the domino effect
+        await hub.publish(service_request, deps)
+        
+        # logger.info(f"[{message.message_id}] Cascading event chain complete.")
+
+        response = board.response
         return {
-            "resolved":      response.resolved      if response else False,
-            "response":      response.response       if response else "System error",
-            "actions_taken": response.actions_taken  if response else [],
+            "resolved":      response.resolved if response else False,
+            "response":      response.response if response else "System error",
+            "actions_taken": response.actions_taken if response else [],
             "total_tokens":  deps.total_tokens,
         }
