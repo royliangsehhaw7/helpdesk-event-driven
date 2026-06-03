@@ -1453,9 +1453,6 @@ class BaseAgent(ABC):
         return self._name
 
     @abstractmethod
-    def subscribe(self, hub: MessageHub, deps: Deps) -> None: ...
-
-    @abstractmethod
     def get_instruction(self) -> str: ...
 ```
 
@@ -1574,15 +1571,15 @@ class IntakeAgent:
 - **Tools**: `get_order_summary`, `get_order_line_items`, `get_order_total`, `log_decision`
 
 ```python
-from datetime import datetime
-from agents.base_agent import BaseAgent
-from core.deps import Deps
-from schemas.messages.service_request_message import ServiceRequestMessage
-from schemas.messages.purchase_message import PurchaseResultMessage
-from schemas.outputs.purchase_output import PurchaseOutput
-
-
 class PurchaseAgent(BaseAgent):
+    def __init__(self, name: str, agent: Agent):
+        # 1. Run the BaseAgent constructor to assign self._name and self._agent
+        super().__init__(name=name, agent=agent)
+        
+        # 2. Intercept the newly assigned self._agent and register the instructions
+        @self._agent.system_prompt
+        def assign_system_instructions(ctx) -> str:
+            return self.get_instruction()  
 
     def get_instruction(self) -> str:
         return """
@@ -1606,7 +1603,7 @@ class PurchaseAgent(BaseAgent):
             Call log_decision once. Return a PurchaseOutput.
         """
 
-    async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
+    async def handle(self, param: AgentParam) -> None:
         result = await self._agent.run(
             f"Verify purchase for order {deps.order_id} "
             f"by customer {deps.customer_id}. "
@@ -1615,12 +1612,12 @@ class PurchaseAgent(BaseAgent):
             instructions=self.get_instruction(),
         )
         finding: PurchaseOutput = result.output
-        deps.board.purchase = finding
+        param.deps.board.purchase = finding
 
-        await deps.hub.publish(PurchaseResultMessage(
+        await param.deps.hub.publish(PurchaseResultMessage(
             triggered_by="purchase_agent",
             timestamp=datetime.now().isoformat(),
-        ))
+        ), deps = param.deps)
 ```
 
 ### 9.5 ProfileAgent
@@ -1643,7 +1640,15 @@ from schemas.outputs.profile_output import ProfileOutput
 
 
 class ProfileAgent(BaseAgent):
-
+    def __init__(self, name: str, agent: Agent):
+        # 1. Run the BaseAgent constructor to assign self._name and self._agent
+        super().__init__(name=name, agent=agent)
+        
+        # 2. Intercept the newly assigned self._agent and register the instructions
+        @self._agent.system_prompt
+        def assign_system_instructions(ctx) -> str:
+            return self.get_instruction()
+    
     def get_instruction(self) -> str:
         return """
             You are the ProfileAgent in a customer service system.
@@ -1668,20 +1673,19 @@ class ProfileAgent(BaseAgent):
             Call log_decision once. Return a ProfileOutput.
         """
 
-    async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
+    async def handle(self, param: AgentParam) -> None:
         result = await self._agent.run(
             f"Build profile for customer {deps.customer_id}. "
             f"Message context: {message.message}",
             deps=deps,
-            instructions=self.get_instruction(),
         )
         finding: ProfileOutput = result.output
-        deps.board.profile = finding
+        param.deps.board.profile = finding
 
-        await deps.hub.publish(ProfileResultMessage(
+        await param.deps.hub.publish(ProfileResultMessage(
             triggered_by="profile_agent",
             timestamp=datetime.now().isoformat(),
-        ))
+        ), deps=param.deps)
 ```
 
 ### 9.6 ComplaintAgent
@@ -1694,14 +1698,6 @@ class ProfileAgent(BaseAgent):
 - **Tools**: `log_decision` only
 
 ```python
-from datetime import datetime
-from agents.base_agent import BaseAgent
-from core.deps import Deps
-from schemas.messages.service_request_message import ServiceRequestMessage
-from schemas.messages.complaint_message import ComplaintResultMessage
-from schemas.outputs.complaint_output import ComplaintOutput
-
-
 class ComplaintAgent(BaseAgent):
 
     def get_instruction(self) -> str:
@@ -1731,15 +1727,14 @@ class ComplaintAgent(BaseAgent):
         result = await self._agent.run(
             f"Classify this complaint: {message.message}",
             deps=deps,
-            instructions=self.get_instruction(),
         )
         finding: ComplaintOutput = result.output
-        deps.board.complaint = finding
+        param.deps.board.complaint = finding
 
-        await deps.hub.publish(ComplaintResultMessage(
+        await param.deps.hub.publish(ComplaintResultMessage(
             triggered_by="complaint_agent",
             timestamp=datetime.now().isoformat(),
-        ))
+        ), deps=param.deps)
 ```
 
 ### 9.7 SentimentAgent
@@ -1780,28 +1775,28 @@ class SentimentAgent(BaseAgent):
             Return {"sentiment_score": float, "sentiment_label": str}.
         """
 
-    async def handle(self, message: ServiceRequestMessage, deps: Deps) -> None:
+    async def handle(self, param: AgentParam) -> None:
         result = await self._agent.run(
             f"Score the sentiment of this message: {message.message}",
             deps=deps,
             instructions=self.get_instruction(),
         )
         score = result.output
-        if deps.board.profile is not None:
-            deps.board.profile.sentiment_score = score["sentiment_score"]
-            deps.board.profile.sentiment_label = score["sentiment_label"]
+        if param.deps.board.profile is not None:
+            param.deps.board.profile.sentiment_score = score["sentiment_score"]
+            param.deps.board.profile.sentiment_label = score["sentiment_label"]
         else:
             self._pending_score = score["sentiment_score"]
             self._pending_label = score["sentiment_label"]
 
-    async def handle_profile(self, message: ProfileResultMessage, deps: Deps) -> None:
+    async def handle_profile(self, param: AgentParam) -> None:
         """
         Called when ProfileResultMessage arrives. Applies pending sentiment if
         SentimentAgent finished before ProfileAgent posted to the board.
         """
         if hasattr(self, "_pending_score") and self._pending_score is not None:
-            deps.board.profile.sentiment_score = self._pending_score
-            deps.board.profile.sentiment_label = self._pending_label
+            param.deps.board.profile.sentiment_score = self._pending_score
+            param.deps.board.profile.sentiment_label = self._pending_label
             self._pending_score = None
             self._pending_label = None
 ```
@@ -1838,17 +1833,17 @@ class RefundAgent(BaseAgent):
     def get_instruction(self) -> str:
         return ""
 
-    async def handle(self, message, deps: Deps) -> None:
-        if deps.board.purchase is None or deps.board.complaint is None:
+    async def handle(self, param: AgentParam) -> None:
+        if param.deps.board.purchase is None or deps.board.complaint is None:
             return  # one dependency not yet on board — exit silently
 
         finding = self._check(
-            deps.board.purchase,
-            deps.board.complaint,
-            deps.policy,
+            param.deps.board.purchase,
+            param.deps.board.complaint,
+            param.deps.policy,
         )
-        deps.board.refund = finding
-        await deps.hub.publish(RefundResultMessage(
+        param.deps.board.refund = finding
+        await param.deps.hub.publish(RefundResultMessage(
             triggered_by="refund_agent",
             timestamp=datetime.now().isoformat(),
         ))
@@ -1906,6 +1901,15 @@ from schemas.messages.resolution_message import ResolutionResultMessage
 from schemas.outputs.resolution_output import ResolutionOutput
 
 class ResolutionAgent(BaseAgent):
+    def __init__(self, name: str, agent: Agent):
+        # 1. Run the BaseAgent constructor to assign self._name and self._agent
+        super().__init__(name=name, agent=agent)
+        
+        # 2. Intercept the newly assigned self._agent and register the instructions
+        @self._agent.system_prompt
+        def assign_system_instructions(ctx) -> str:
+            return self.get_instruction()
+
 
     def get_instruction(self) -> str:
         return """
@@ -1927,29 +1931,28 @@ class ResolutionAgent(BaseAgent):
             Call log_decision once. Return a ResolutionOutput.
         """
 
-    async def handle(self, message, deps: Deps) -> None:
-        if (deps.board.refund is None
-                or deps.board.profile is None
-                or deps.board.complaint is None):
+    async def handle(self, param: AgentParam) -> None:
+        if (param.deps.board.refund is None
+                or param.deps.board.profile is None
+                or param.deps.board.complaint is None):
             return  # not all dependencies on board yet — exit silently
 
         context = json.dumps({
-            "purchase":   deps.board.purchase.model_dump()  if deps.board.purchase  else {},
-            "profile":    deps.board.profile.model_dump(),
-            "complaint":  deps.board.complaint.model_dump(),
-            "refund":     deps.board.refund.model_dump(),
+            "purchase":   param.deps.board.purchase.model_dump()  if deps.board.purchase  else {},
+            "profile":    param.deps.board.profile.model_dump(),
+            "complaint":  param.deps.board.complaint.model_dump(),
+            "refund":     param.deps.board.refund.model_dump(),
             "policy": {
                 "replacement_eligible_categories":
-                    deps.policy.replacement_eligible_categories,
+                    param.deps.policy.replacement_eligible_categories,
                 "complaint_escalation_threshold":
-                    deps.policy.complaint_escalation_threshold,
+                    param.deps.policy.complaint_escalation_threshold,
             },
         }, indent=2)
 
         result = await self._agent.run(
             f"Determine resolution options:\n{context}",
-            deps=deps,
-            instructions=self.get_instruction(),
+            deps=param.deps,
         )
         finding: ResolutionOutput = result.output
         deps.board.resolution = finding
@@ -1957,7 +1960,7 @@ class ResolutionAgent(BaseAgent):
         await deps.hub.publish(ResolutionResultMessage(
             triggered_by="resolution_agent",
             timestamp=datetime.now().isoformat(),
-        ))
+        ),deps=param.deps)
 ```
 
 ### 9.10 ResponseComposerAgent
@@ -2004,22 +2007,22 @@ class ResponseComposerAgent(BaseAgent):
             Call log_decision once. Return a ResponseOutput.
         """
 
-    async def handle(self, message: ResolutionResultMessage, deps: Deps) -> None:
+    async def handle(self, param: AgentParam) -> None:
         context = json.dumps({
-            "profile":    deps.board.profile.model_dump()   if deps.board.profile   else {},
-            "complaint":  deps.board.complaint.model_dump() if deps.board.complaint else {},
-            "purchase":   deps.board.purchase.model_dump()  if deps.board.purchase  else {},
-            "refund":     deps.board.refund.model_dump()    if deps.board.refund    else {},
-            "resolution": deps.board.resolution.model_dump(),
+            "profile":    param.deps.board.profile.model_dump()   if param.deps.board.profile   else {},
+            "complaint":  param.deps.board.complaint.model_dump() if param.deps.board.complaint else {},
+            "purchase":   param.deps.board.purchase.model_dump()  if param.deps.board.purchase  else {},
+            "refund":     param.deps.board.refund.model_dump()    if param.deps.board.refund    else {},
+            "resolution": param.deps.board.resolution.model_dump(),
         }, indent=2)
 
         result = await self._agent.run(
             f"Compose a customer response:\n{context}",
-            deps=deps,
+            deps=param.deps,
             instructions=self.get_instruction(),
         )
         finding: ResponseOutput = result.output
-        deps.board.response = finding
+        param.deps.board.response = finding
 ```
 
 ---
@@ -2039,50 +2042,12 @@ every call. Agents carry no per-request instance state and do not need to be res
 requests.
 
 ```python
-import logging
-from pydantic_ai import Agent
-
-from agents.purchase_agent import PurchaseAgent
-from agents.profile_agent import ProfileAgent
-from agents.complaint_agent import ComplaintAgent
-from agents.sentiment_agent import SentimentAgent
-from agents.refund_agent import RefundAgent
-from agents.resolution_agent import ResolutionAgent
-from agents.response_composer_agent import ResponseComposerAgent
-
-from core.message_hub import MessageHub
-from core.deps import Deps
-from core.blackboard import Blackboard
-from core.llm_factory import LLMFactory
-
-from db.connection import Database
-from db.repositories.facade import RepoFacade
-from db.repositories.policy_repo import PolicyRepository
-
-from schemas.messages.service_request_message import ServiceRequestMessage
-from schemas.outputs.purchase_output import PurchaseOutput
-from schemas.outputs.profile_output import ProfileOutput
-from schemas.outputs.complaint_output import ComplaintOutput
-from schemas.outputs.resolution_output import ResolutionOutput
-from schemas.outputs.response_output import ResponseOutput
-
-from tools.agent_logger import log_decision
-from tools.customer_tools import get_customer_profile
-from tools.order_tools import (
-    get_order_summary, get_order_line_items,
-    get_order_total, get_customer_order_count,
-)
-from tools.complaint_tools import get_recent_complaints, get_complaint_count
-
-logger = logging.getLogger(__name__)
-
-
 class CustomerServiceHandler:
     """
     Resolves a customer message end-to-end using the Observer fan-out pattern.
 
-    Built once at startup. Initialises DB, policy, repo, LLM models, and agents
-    internally — no constructor arguments required.
+    Built once at startup. Agents and their underlying LLM wrappers are
+    constructed once and reused across all calls.
 
     Per-request state (MessageHub, Blackboard, Deps) is created fresh inside
     handle() — never shared between calls.
@@ -2094,142 +2059,152 @@ class CustomerServiceHandler:
         self._gmodel = factory.get_model(model="")
         # -- openrouter
         factory = LLMFactory("openrouter")
-        self._omodel = factory.get_model(model="")
+        self._omodel = factory.get_model(model="nvidia/nemotron-3-super-120b-a12b:free")
 
-        self._agents = self._build_agents()
+        agents_list = self._build_agents()
+        self._agents = {agent.name: agent for agent in agents_list}
 
     def _build_agents(self) -> list:
         """Construct all agents once. Agent instances are stateless across
-        requests — all mutable state lives in Deps and Blackboard, which are per-request."""
+        requests — all mutable state lives in Deps, which is per-request."""
         return [
-            PurchaseAgent(
-                name="purchase_agent",
-                agent=Agent(
-                    model=self._model, deps_type=Deps,
-                    output_type=PurchaseOutput,
-                    tools=[log_decision, get_order_summary,
-                           get_order_line_items, get_order_total],
-                ),
-            ),
             ProfileAgent(
                 name="profile_agent",
                 agent=Agent(
-                    model=self._model, deps_type=Deps,
+                    model=self._omodel, 
+                    deps_type=Deps,
                     output_type=ProfileOutput,
-                    tools=[log_decision, get_customer_profile,
+                    tools=[log_decision, 
+                           get_customer_profile,
                            get_customer_order_count,
-                           get_recent_complaints, get_complaint_count],
+                           get_recent_complaints, 
+                           get_complaint_count],
                 ),
             ),
-            ComplaintAgent(
-                name="complaint_agent",
+            PurchaseAgent(
+                name="purchase_agent",
                 agent=Agent(
-                    model=self._model, deps_type=Deps,
-                    output_type=ComplaintOutput,
-                    tools=[log_decision],
-                ),
-            ),
-            SentimentAgent(
-                name="sentiment_agent",
-                agent=Agent(
-                    model=self._model, deps_type=Deps,
-                    output_type=dict,
-                    tools=[log_decision],
+                    model=self._omodel, 
+                    deps_type=Deps,
+                    output_type=PurchaseOutput,
+                    tools=[log_decision, 
+                           get_order_summary,
+                           get_order_line_items, 
+                           get_order_total],
                 ),
             ),
             RefundAgent(
                 name="refund_agent",
+                agent=Agent(
+                    model=self._omodel, 
+                    deps_type=Deps,
+                    output_type=RefundOutput,
+                    tools=[log_decision],
+                ),
             ),
             ResolutionAgent(
                 name="resolution_agent",
                 agent=Agent(
-                    model=self._model, deps_type=Deps,
+                    model=self._omodel, 
+                    deps_type=Deps,
                     output_type=ResolutionOutput,
                     tools=[log_decision],
                 ),
             ),
             ResponseComposerAgent(
-                name="response_composer_agent",
+                name="response_agent",
                 agent=Agent(
-                    model=self._model, deps_type=Deps,
+                    model=self._omodel, 
+                    deps_type=Deps,
                     output_type=ResponseOutput,
                     tools=[log_decision, get_customer_profile],
                 ),
             ),
+
+            # ComplaintAgent(
+            #     name="complaint_agemt",
+            #     agent=Agent(
+            #         model=self._omodel, 
+            #         deps_type=Deps,
+            #         output_type=ComplaintResult,
+            #         tools=[log_decision],
+            #     ),
+            # ),
+            # SentimentAgent(
+            #     name="sentiment",
+            #     agent=Agent(
+            #         model=model, 
+            #         deps_type=Deps,
+            #         output_type=dict,
+            #         tools=[log_decision],
+            #     ),
+            # ),
         ]
 
-    async def handle(self, message: ServiceRequestMessage) -> dict:
+    async def handle(self, service_request: ServiceRequestMessage) -> dict:
         """Handle one customer message. Returns a result dict.
 
         Creates a fresh MessageHub, Blackboard, and Deps for this request.
-        Wires all agents to the hub via handler closures — agents have no knowledge
-        of the hub. Fires the single publish() call that triggers the entire cascade.
+        Resets stateful agents, subscribes all agents to the hub, then fires
+        the single publish() call that triggers the entire agent cascade.
         """
         hub   = MessageHub()
         board = Blackboard()
+        repo = FacadeRepos()
+
+        policy_repo = PolicyRepository()
+        policy = await policy_repo.get_policy()
+        policy = Policy(**policy)
+
         deps  = Deps(
-            repo=self._repo,
             hub=hub,
+            repos=repo,
             board=board,
-            policy=self._policy,
-            message_id=message.message_id,
-            customer_id=message.customer_id,
-            order_id=message.order_id,
+            policy=policy,
+
+            message_id=service_request.message_id,
+            customer_id=service_request.customer_id,
+            order_id=service_request.order_id,
+
             total_tokens=0,
         )
 
-        # Wire agents to the hub. Each closure captures deps and delegates to the
-        # agent's handle() method. Agents never see the hub — all wiring is here.
-        purchase_agent, profile_agent, complaint_agent, sentiment_agent, \
-        refund_agent, resolution_agent, composer_agent = self._agents
+        # =====================================================================
+        # 100% CLEAN, IMPERATIVE SUBSCRIPTIONS
+        # =====================================================================
+        # Pass the agent methods directly to the hub. No wrappers needed!
+        
+        # Phase 1: Direct triggers from the initial customer request
+        hub.subscribe(ServiceRequestMessage, self._agents["purchase_agent"].handle)
+        hub.subscribe(ServiceRequestMessage, self._agents["profile_agent"].handle)
+        # hub.subscribe(ServiceRequestMessage, self._agents["complaint_agent"].handle)
+        # hub.subscribe(ServiceRequestMessage, self._agents["sentiment_agent"].handle)
 
-        async def on_service_request(msg):
-            await purchase_agent.handle(msg, deps)
+        # Phase 2: Cascading downstream triggers
+        hub.subscribe(PurchaseResultMessage, self._agents["refund_agent"].handle)
+        hub.subscribe(ProfileResultMessage, self._agents["refund_agent"].handle)
 
-        async def on_service_request_profile(msg):
-            await profile_agent.handle(msg, deps)
+        hub.subscribe(RefundResultMessage, self._agents["resolution_agent"].handle)
+        hub.subscribe(ResolutionResultMessage, self._agents["response_agent"].handle)
 
-        async def on_service_request_complaint(msg):
-            await complaint_agent.handle(msg, deps)
+        # hub.subscribe(ComplaintResultMessage, self._agents["refund_agent"].handle)
+        # hub.subscribe(RefundResultMessage,    self._agents["resolution_agent"].handle)
 
-        async def on_service_request_sentiment(msg):
-            await sentiment_agent.handle(msg, deps)
+        # =====================================================================
+        # THE CASCADE EXECUTION
+        # =====================================================================
+        # logger.info(f"[{message.message_id}] Cascading event chain started.")
+        
+        # # We pass both the message and deps to the hub to kick off the domino effect
+        await hub.publish(service_request, deps)
+        
+        # logger.info(f"[{message.message_id}] Cascading event chain complete.")
 
-        async def on_purchase_result(msg):
-            await refund_agent.handle(msg, deps)
-
-        async def on_complaint_result(msg):
-            await refund_agent.handle(msg, deps)
-
-        async def on_profile_result(msg):
-            await sentiment_agent.handle_profile(msg, deps)
-            await resolution_agent.handle(msg, deps)
-
-        async def on_refund_result(msg):
-            await resolution_agent.handle(msg, deps)
-
-        async def on_resolution_result(msg):
-            await composer_agent.handle(msg, deps)
-
-        hub.subscribe(ServiceRequestMessage,  on_service_request)
-        hub.subscribe(ServiceRequestMessage,  on_service_request_profile)
-        hub.subscribe(ServiceRequestMessage,  on_service_request_complaint)
-        hub.subscribe(ServiceRequestMessage,  on_service_request_sentiment)
-        hub.subscribe(PurchaseResultMessage,  on_purchase_result)
-        hub.subscribe(ComplaintResultMessage, on_complaint_result)
-        hub.subscribe(ProfileResultMessage,   on_profile_result)
-        hub.subscribe(RefundResultMessage,    on_refund_result)
-        hub.subscribe(ResolutionResultMessage, on_resolution_result)
-
-        logger.info(f"[{message.message_id}] cascade start")
-        await hub.publish(message)
-        logger.info(f"[{message.message_id}] cascade complete")
-
-        response = deps.board.response
+        response = board.response
         return {
-            "resolved":      response.resolved      if response else False,
-            "response":      response.response       if response else "System error",
-            "actions_taken": response.actions_taken  if response else [],
+            "resolved":      response.resolved if response else False,
+            "response":      response.response if response else "System error",
+            "actions_taken": response.actions_taken if response else [],
             "total_tokens":  deps.total_tokens,
         }
 ```
@@ -2244,47 +2219,41 @@ import json
 import uuid
 from datetime import datetime
 
+from core.llm_factory import LLMFactory
+from services.customer_service import CustomerServiceHandler
+from schemas.messages import ServiceRequestMessage
+
 from agents.intake_agent import IntakeAgent
-from service.handler import CustomerServiceHandler
-from schemas.messages.service_request_message import ServiceRequestMessage
+
 
 CUSTOMER_ID = "C001"   # in production: resolved from auth / session
 
-
 async def main() -> None:
     handler = CustomerServiceHandler()
-    await handler._init_async()
 
-    try:
-        await chat(handler)
-    finally:
-        from db.connection import Database
-        await Database.close()
+    # -- 1. prepare model
+    factory = LLMFactory("openrouter")
+    model = factory.get_model("nvidia/nemotron-3-super-120b-a12b:free")
 
+    intakeAgent = IntakeAgent(model)
 
-async def chat(handler: CustomerServiceHandler) -> None:
-    """Intake loop. Runs until the customer's complaint is fully collected.
-
-    IntakeAgent holds a multi-turn conversation, accumulating context across
-    turns via its own _history. When it signals ready=True, a ServiceRequestMessage
-    is constructed from the collected context and handed to CustomerServiceHandler.
-    The resolution cascade fires once on the complete, summarised complaint.
-    """
-    intake = IntakeAgent()
-
+    # -- 2. main loop
     print("Agent: Hi, how can I help you today?")
-
     while True:
+        # -- a. user chat
         user_input = input("Customer: ").strip()
         if not user_input:
             continue
 
-        intake_result = await intake.collect(user_input, customer_id=CUSTOMER_ID)
+        intake_result = await intakeAgent.collect(user_input, customer_id=CUSTOMER_ID)
         print(f"Agent: {intake_result.reply}")
 
         if not intake_result.ready:
             continue
 
+        # -- b process service request
+        # IntakeAgent has collected order_id and a complete complaint description.
+        # Hand off to CustomerServiceHandler for the full resolution cascade.
         message = ServiceRequestMessage(
             message_id=str(uuid.uuid4()),
             customer_id=CUSTOMER_ID,
@@ -2293,10 +2262,11 @@ async def chat(handler: CustomerServiceHandler) -> None:
             triggered_by="intake_agent",
             timestamp=datetime.now().isoformat(),
         )
+        # print(message.model_dump())
 
+        # -- c. print results
         result = await handler.handle(message)
         print(json.dumps(result, indent=2))
-        break
 
 
 asyncio.run(main())
